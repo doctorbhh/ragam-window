@@ -5,6 +5,34 @@
   "main": "dist-electron/main.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
+  "build": {
+    "appId": "com.yourname.myspotifyelectron",
+    "productName": "My Spotify Electron",
+    "files": [
+      "dist-electron/**/*",
+      "dist/**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/*.d.ts",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
+    ],
+    "asarUnpack": [
+      "bin/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "extraResources": [
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  },
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Server,
   Trash2,
@@ -46,8 +46,13 @@ import {
   setSearchProvider,
 } from "@/services/instanceService";
 
+interface Instance {
+  name: string;
+  api_url: string;
+}
+
 const Settings = () => {
-  const [instances, setInstances] = useState([]);
+  const [instances, setInstances] = useState<Instance[]>([]);
   const [currentInstance, setCurrentInstance] = useState(DEFAULT_INSTANCE);
   const [currentQuality, setCurrentQuality] = useState("high");
   const [currentProvider, setCurrentProvider] = useState("youtube");
@@ -77,19 +82,19 @@ const Settings = () => {
     }
   };
 
-  const handleInstanceChange = (value) => {
+  const handleInstanceChange = (value: string) => {
     setSavedInstance(value);
     setCurrentInstance(value);
     toast.success("Search API updated");
   };
 
-  const handleQualityChange = (value) => {
+  const handleQualityChange = (value: string) => {
     setAudioQuality(value);
     setCurrentQuality(value);
     toast.success(`Audio quality set to ${value}`);
   };
 
-  const handleProviderChange = (value) => {
+  const handleProviderChange = (value: string) => {
     setSearchProvider(value);
     setCurrentProvider(value);
     toast.success(

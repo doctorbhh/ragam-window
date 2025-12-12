@@ -1,12 +1,10 @@
-// src/App.tsx
 import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import Layout from './components/Layout' // Import the Layout
-import Library from './pages/Library' // Import the Library page
-import Index from './pages/Index.tsx'
+// CHANGED: Import HashRouter instead of BrowserRouter
+import { HashRouter, Routes, Route } from 'react-router-dom'
+import Index from './pages/Index'
 import AuthCallback from './pages/AuthCallback'
 import NotFound from './pages/NotFound'
 import Callback from './pages/Callback'
@@ -15,6 +13,8 @@ import LikedSongs from './pages/LikedSongs'
 import Settings from './pages/Settings'
 import { AuthProvider as SpotifyAuthProvider } from '@/context/SpotifyAuthContext'
 import { PlayerProvider } from '@/context/PlayerContext'
+import Layout from './components/Layout' // Ensure this import exists
+import Library from './pages/Library' // Ensure this import exists
 
 const queryClient = new QueryClient()
 
@@ -25,25 +25,25 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
-          <BrowserRouter>
+          {/* CHANGED: Use HashRouter for Electron compatibility */}
+          <HashRouter>
             <Routes>
-              {/* Auth callbacks must remain outside Layout if they don't need sidebar */}
+              {/* Public Routes */}
               <Route path="/callback" element={<Callback />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
 
-              {/* Main App Routes Wrapped in Layout */}
+              {/* Protected/Layout Routes */}
               <Route element={<Layout />}>
                 <Route path="/" element={<Index />} />
-                <Route path="/library" element={<Library />} /> {/* New Route */}
+                <Route path="/library" element={<Library />} />
                 <Route path="/playlist/:playlistId" element={<Playlist />} />
                 <Route path="/liked-songs" element={<LikedSongs />} />
                 <Route path="/settings" element={<Settings />} />
               </Route>
 
-              {/* 404 Route */}
               <Route path="*" element={<NotFound />} />
             </Routes>
-          </BrowserRouter>
+          </HashRouter>
         </TooltipProvider>
       </PlayerProvider>
     </SpotifyAuthProvider>

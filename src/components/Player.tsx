@@ -600,7 +600,7 @@ export function Player() {
               size="icon"
               variant="ghost"
               className="h-9 w-9 text-muted-foreground hover:text-foreground hidden sm:flex"
-              onClick={() => downloadTrack(currentTrack)}
+              onClick={() => currentTrack && downloadTrack(currentTrack)}
               disabled={!currentTrack}
               title="Download"
             >

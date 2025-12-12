@@ -1,33 +1,33 @@
-import { useEffect, useState } from "react";
-import { useSpotifyAuth } from "@/context/SpotifyAuthContext";
-import { getSavedTracks } from "@/services/spotifyservice";
-import { SpotifyTrack } from "@/types/spotify";
-import TrackItem from "@/components/TrackItem";
-import { Heart } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useEffect, useState } from 'react'
+import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
+import { getSavedTracks } from '@/services/spotifyservice'
+import { SpotifyTrack } from '@/types/spotify'
+import TrackItem from '@/components/TrackItem'
+import { Heart } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const LikedSongs = () => {
-  const { spotifyToken } = useSpotifyAuth();
-  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { spotifyToken } = useSpotifyAuth()
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (spotifyToken) {
-      fetchLikedSongs();
+      fetchLikedSongs()
     }
-  }, [spotifyToken]);
+  }, [spotifyToken])
 
   const fetchLikedSongs = async () => {
-    setLoading(true);
+    setLoading(true)
     try {
-      const response = await getSavedTracks(spotifyToken!);
-      setTracks(response.items.map(item => item.track));
+      const response = await getSavedTracks(spotifyToken!)
+      setTracks(response.items.map((item: any) => item.track))
     } catch (error) {
-      console.error("Error fetching liked songs:", error);
+      console.error('Error fetching liked songs:', error)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   return (
     <div>
@@ -62,14 +62,12 @@ const LikedSongs = () => {
         ) : (
           <div className="text-center py-10">
             <p className="text-xl mb-2">Your Liked Songs playlist is empty</p>
-            <p className="text-muted-foreground">
-              Save songs by clicking the heart icon
-            </p>
+            <p className="text-muted-foreground">Save songs by clicking the heart icon</p>
           </div>
         )}
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default LikedSongs;
+export default LikedSongs

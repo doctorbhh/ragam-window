@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Header } from '@/components/Header.tsx'
 import { SongCard } from '@/components/SongCard.tsx'
-import { AIRecommendations } from '@/components/AIRecommendations'
+import { AIRecommendations } from '@/components/AIRecommendations.tsx'
 import { Music2 } from 'lucide-react'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { useSpotifyPlaylists } from '@/hooks/useSpotifyPlaylists'
