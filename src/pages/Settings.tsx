@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+// src/pages/Settings.tsx
+import { useEffect, useState } from 'react'
 import {
   Server,
   Trash2,
@@ -6,22 +7,17 @@ import {
   Signal,
   AlertTriangle,
   Globe,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  MapPin // NEW ICON
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  SelectValue
+} from '@/components/ui/select'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,9 +27,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { toast } from "sonner";
+  AlertDialogTrigger
+} from '@/components/ui/alert-dialog'
+import { toast } from 'sonner'
 import {
   fetchInstances,
   getSavedInstance,
@@ -44,69 +40,88 @@ import {
   setAudioQuality,
   getSearchProvider,
   setSearchProvider,
-} from "@/services/instanceService";
+  getSearchRegion, // NEW IMPORT
+  setSearchRegion // NEW IMPORT
+} from '@/services/instanceService'
 
 interface Instance {
-  name: string;
-  api_url: string;
+  name: string
+  api_url: string
 }
 
+const REGIONS = [
+  { code: 'US', name: 'United States' },
+  { code: 'IN', name: 'India' },
+  { code: 'GB', name: 'United Kingdom' },
+  { code: 'CA', name: 'Canada' },
+  { code: 'AU', name: 'Australia' },
+  { code: 'JP', name: 'Japan' },
+  { code: 'DE', name: 'Germany' },
+  { code: 'FR', name: 'France' },
+  { code: 'BR', name: 'Brazil' }
+]
+
 const Settings = () => {
-  const [instances, setInstances] = useState<Instance[]>([]);
-  const [currentInstance, setCurrentInstance] = useState(DEFAULT_INSTANCE);
-  const [currentQuality, setCurrentQuality] = useState("high");
-  const [currentProvider, setCurrentProvider] = useState("youtube");
-  const [loading, setLoading] = useState(false);
+  const [instances, setInstances] = useState<Instance[]>([])
+  const [currentInstance, setCurrentInstance] = useState(DEFAULT_INSTANCE)
+  const [currentQuality, setCurrentQuality] = useState('high')
+  const [currentProvider, setCurrentProvider] = useState('youtube')
+  const [currentRegion, setCurrentRegion] = useState('IN') // NEW STATE
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    loadInstances();
-    setCurrentInstance(getSavedInstance());
-    setCurrentQuality(getAudioQuality());
-    setCurrentProvider(getSearchProvider());
-  }, []);
+    loadInstances()
+    setCurrentInstance(getSavedInstance())
+    setCurrentQuality(getAudioQuality())
+    setCurrentProvider(getSearchProvider())
+    setCurrentRegion(getSearchRegion()) // LOAD SAVED
+  }, [])
 
   const loadInstances = async () => {
-    setLoading(true);
+    setLoading(true)
     try {
-      const list = await fetchInstances();
+      const list = await fetchInstances()
       if (list.length > 0) {
-        setInstances(list);
-        toast.success(`Loaded ${list.length} instances`);
+        setInstances(list)
+        toast.success(`Loaded ${list.length} instances`)
       } else {
-        toast.error("Could not load instances list");
+        toast.error('Could not load instances list')
       }
     } catch (e) {
-      toast.error("Failed to fetch instances");
+      toast.error('Failed to fetch instances')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleInstanceChange = (value: string) => {
-    setSavedInstance(value);
-    setCurrentInstance(value);
-    toast.success("Search API updated");
-  };
+    setSavedInstance(value)
+    setCurrentInstance(value)
+    toast.success('Search API updated')
+  }
 
   const handleQualityChange = (value: string) => {
-    setAudioQuality(value);
-    setCurrentQuality(value);
-    toast.success(`Audio quality set to ${value}`);
-  };
+    setAudioQuality(value)
+    setCurrentQuality(value)
+    toast.success(`Audio quality set to ${value}`)
+  }
 
   const handleProviderChange = (value: string) => {
-    setSearchProvider(value);
-    setCurrentProvider(value);
-    toast.success(
-      `Search provider switched to ${
-        value === "jiosaavn" ? "JioSaavn" : "YouTube"
-      }`
-    );
-  };
+    setSearchProvider(value)
+    setCurrentProvider(value)
+    toast.success(`Search provider switched to ${value === 'jiosaavn' ? 'JioSaavn' : 'YouTube'}`)
+  }
+
+  // NEW HANDLER
+  const handleRegionChange = (value: string) => {
+    setSearchRegion(value)
+    setCurrentRegion(value)
+    toast.success(`Search region set to ${value}`)
+  }
 
   const handleClearData = () => {
-    clearAllData();
-  };
+    clearAllData()
+  }
 
   return (
     <div className="container mx-auto p-6 max-w-2xl pb-24">
@@ -120,79 +135,47 @@ const Settings = () => {
               <Globe className="h-5 w-5 text-primary" />
               <CardTitle>Search Provider</CardTitle>
             </div>
-            <CardDescription>
-              Choose where to search and fetch songs from.
-            </CardDescription>
+            <CardDescription>Choose where to search and fetch songs from.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Select
-              value={currentProvider}
-              onValueChange={handleProviderChange}
-            >
+            <Select value={currentProvider} onValueChange={handleProviderChange}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="youtube">
-                  YouTube (Piped + Invidious)
-                </SelectItem>
-                <SelectItem value="jiosaavn">
-                  JioSaavn (Fast & Direct)
-                </SelectItem>
+                <SelectItem value="youtube">YouTube (Piped + Invidious)</SelectItem>
+                <SelectItem value="jiosaavn">JioSaavn (Fast & Direct)</SelectItem>
               </SelectContent>
             </Select>
           </CardContent>
         </Card>
 
-        {/* API Instance Settings (Only show if YouTube) */}
-        {currentProvider === "youtube" && (
-          <Card className="border-border/50 bg-card/50 backdrop-blur">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Server className="h-5 w-5 text-primary" />
-                <CardTitle>Piped Instance</CardTitle>
-              </div>
-              <CardDescription>
-                Select the Piped server used for YouTube searches.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4">
-                <Select
-                  value={currentInstance}
-                  onValueChange={handleInstanceChange}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select an instance" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_INSTANCE}>
-                      Default ({new URL(DEFAULT_INSTANCE).hostname})
-                    </SelectItem>
-                    {instances.map((inst, idx) => (
-                      <SelectItem key={idx} value={inst.api_url}>
-                        {inst.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+        {/* NEW: Region Settings */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <MapPin className="h-5 w-5 text-primary" />
+              <CardTitle>Search Region</CardTitle>
+            </div>
+            <CardDescription>Set your preferred country for search results.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Select value={currentRegion} onValueChange={handleRegionChange}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select region" />
+              </SelectTrigger>
+              <SelectContent>
+                {REGIONS.map((region) => (
+                  <SelectItem key={region.code} value={region.code}>
+                    {region.name} ({region.code})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
 
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={loadInstances}
-                  disabled={loading}
-                  title="Refresh List"
-                >
-                  <RefreshCw
-                    className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
-                  />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
+        {/* ... Existing Instance, Quality, and Danger Zone Cards (Keep them exactly as they were) ... */}
         {/* Audio Quality Settings */}
         <Card className="border-border/50 bg-card/50 backdrop-blur">
           <CardHeader>
@@ -216,6 +199,48 @@ const Settings = () => {
           </CardContent>
         </Card>
 
+        {/* API Instance Settings (Only show if YouTube) */}
+        {currentProvider === 'youtube' && (
+          <Card className="border-border/50 bg-card/50 backdrop-blur">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Server className="h-5 w-5 text-primary" />
+                <CardTitle>Piped Instance</CardTitle>
+              </div>
+              <CardDescription>Select the Piped server used for YouTube searches.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-4">
+                <Select value={currentInstance} onValueChange={handleInstanceChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select an instance" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={DEFAULT_INSTANCE}>
+                      Default ({new URL(DEFAULT_INSTANCE).hostname})
+                    </SelectItem>
+                    {instances.map((inst, idx) => (
+                      <SelectItem key={idx} value={inst.api_url}>
+                        {inst.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={loadInstances}
+                  disabled={loading}
+                  title="Refresh List"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Danger Zone */}
         <Card className="border-destructive/20 bg-destructive/5">
           <CardHeader>
@@ -223,9 +248,7 @@ const Settings = () => {
               <AlertTriangle className="h-5 w-5" />
               <CardTitle>Danger Zone</CardTitle>
             </div>
-            <CardDescription>
-              Irreversible actions regarding your local data.
-            </CardDescription>
+            <CardDescription>Irreversible actions regarding your local data.</CardDescription>
           </CardHeader>
           <CardContent>
             <AlertDialog>
@@ -257,7 +280,7 @@ const Settings = () => {
         </Card>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default Settings;
+export default Settings

@@ -6,11 +6,12 @@ import { cn } from '@/lib/utils'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { useSpotifyPlaylists } from '@/hooks/useSpotifyPlaylists'
 import { SearchDialog } from '../components/SearchDialog.tsx'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom' // Ensure Link is imported
 
 interface SidebarProps {
   className?: string
 }
+
 export function Sidebar({ className }: SidebarProps) {
   const [searchOpen, setSearchOpen] = useState(false)
   const { isAuthenticated } = useSpotifyAuth()
@@ -43,13 +44,17 @@ export function Sidebar({ className }: SidebarProps) {
 
         <div className="flex-1 rounded-lg bg-sidebar">
           <div className="flex items-center justify-between p-4">
-            <Button
-              variant="ghost"
-              className="justify-start gap-3 p-0 text-sidebar-foreground hover:text-foreground"
-            >
-              <Library className="h-5 w-5" />
-              Your Library
-            </Button>
+            {/* FIX: Wrapped this button in a Link to /library */}
+            <Link to="/library" className="w-full">
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-3 p-0 text-sidebar-foreground hover:text-foreground"
+              >
+                <Library className="h-5 w-5" />
+                Your Library
+              </Button>
+            </Link>
+
             <Button
               size="icon"
               variant="ghost"

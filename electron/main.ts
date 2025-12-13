@@ -55,6 +55,7 @@ function createWindow() {
     width: 1200,
     height: 800,
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -62,10 +63,26 @@ function createWindow() {
       webSecurity: false
     }
   })
-
+  win.setMenuBarVisibility(false)
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', new Date().toLocaleString())
   })
+
+  // HEADER INTERCEPTOR (Prevents "Video Unavailable")
+  win.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ['*://*.youtube.com/*', '*://*.googlevideo.com/*'] },
+    (details, callback) => {
+      const { requestHeaders } = details
+      Object.keys(requestHeaders).forEach((header) => {
+        if (header.toLowerCase() === 'referer' || header.toLowerCase() === 'origin') {
+          delete requestHeaders[header]
+        }
+      })
+      requestHeaders['Referer'] = 'https://www.youtube.com/'
+      requestHeaders['Origin'] = 'https://www.youtube.com'
+      callback({ requestHeaders })
+    }
+  )
 
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
@@ -78,50 +95,96 @@ function createWindow() {
 // --- 1. YOUTUBE HANDLERS (Native execFile) ---
 // ==========================================================
 
-ipcMain.handle('youtube-search', async (_, query) => {
+ipcMain.handle('youtube-search', async (_, query, region = 'US') => {
   try {
-    console.log(`[YouTube] Searching for: ${query}`)
+    console.log(`[YouTube Music] Searching: ${query} (Region: ${region})`)
 
-    // Construct args manually
+    // 1. Construct the YouTube Music Search URL
+    // This forces yt-dlp to scrape music.youtube.com for official audio
+    const searchUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`
+
     const args = [
-      query,
+      searchUrl,
       '--dump-single-json',
-      '--default-search',
-      'ytsearch5:',
-      '--flat-playlist',
-      '--no-warnings'
+      '--playlist-items',
+      '1,2,3,4,5', // Limit to top 5 results
+      '--flat-playlist', // Get metadata quickly without downloading
+      '--no-warnings',
+      '--no-check-certificate',
+      '--geo-bypass-country',
+      region // Apply User Region
     ]
 
     const output = await runYtDlp(args)
 
+    // yt-dlp returns a Playlist object for search URLs
     if (!output || !output.entries) return []
 
     return output.entries.map((entry: any) => ({
       id: entry.id,
       title: entry.title,
-      channelTitle: entry.uploader,
+      // YTM results usually put the artist in 'uploader' or 'artist' fields
+      channelTitle: entry.uploader || entry.artist || 'YouTube Music',
       duration: entry.duration,
-      thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
-      artists: [{ name: entry.uploader }]
+      // Force high-res thumbnail for YTM
+      thumbnail: `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
+      artists: [{ name: entry.uploader || entry.artist || 'Unknown' }]
     }))
   } catch (error: any) {
-    console.error('[YouTube] Search Error:', error)
-    if (!isDev) {
-      dialog.showErrorBox(
-        'Search Error',
-        `Failed to run yt-dlp:\n${error.message}\nPath: ${ytDlpPath}`
-      )
+    // FALLBACK: If YTM search fails (sometimes scraping is blocked), fall back to standard ytsearch
+    console.warn('YTM Search failed, falling back to standard ytsearch:', error.message)
+    try {
+      const fbArgs = [
+        query,
+        '--dump-single-json',
+        '--default-search',
+        'ytsearch5:',
+        '--flat-playlist',
+        '--no-warnings',
+        '--no-check-certificate',
+        '--geo-bypass-country',
+        region // Apply User Region to Fallback too
+      ]
+      const fbOutput = await runYtDlp(fbArgs)
+
+      if (!fbOutput || !fbOutput.entries) return []
+
+      return fbOutput.entries.map((entry: any) => ({
+        id: entry.id,
+        title: entry.title,
+        channelTitle: entry.uploader,
+        duration: entry.duration,
+        thumbnail: `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
+        artists: [{ name: entry.uploader }]
+      }))
+    } catch (fbError) {
+      console.error('Fallback Search Error:', fbError)
+      return []
     }
-    return []
   }
 })
 
-ipcMain.handle('youtube-stream', async (_, videoId) => {
+ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
   try {
-    console.log(`[YouTube] Fetching Stream for: ${videoId}`)
+    console.log(`[YouTube] Fetching Stream for: ${videoId} (Quality: ${quality})`)
     const url = `https://www.youtube.com/watch?v=${videoId}`
 
-    const args = [url, '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best']
+    // Map quality settings to yt-dlp format selectors
+    let formatSelector = 'bestaudio/best'
+    if (quality === 'medium') {
+      formatSelector = 'bestaudio[abr<=128]/bestaudio'
+    } else if (quality === 'low') {
+      formatSelector = 'worstaudio'
+    }
+
+    const args = [
+      url,
+      '--dump-single-json',
+      '--no-warnings',
+      '--format',
+      formatSelector,
+      '--no-check-certificate'
+    ]
 
     const output = await runYtDlp(args)
 
@@ -134,12 +197,7 @@ ipcMain.handle('youtube-stream', async (_, videoId) => {
     }
   } catch (error: any) {
     console.error('[YouTube] Stream Extraction Error:', error)
-    if (!isDev) {
-      dialog.showErrorBox(
-        'Stream Error',
-        `Failed to play song:\n${error.message}\nPath: ${ytDlpPath}`
-      )
-    }
+    // Don't show dialog for stream errors to avoid interrupting playback flow too aggressively
     return null
   }
 })

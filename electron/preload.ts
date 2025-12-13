@@ -1,11 +1,13 @@
 import { ipcRenderer, contextBridge } from 'electron'
 
-// --------- Expose some API to the Renderer process ---------
 contextBridge.exposeInMainWorld('electron', {
   login: () => ipcRenderer.invoke('spotify-login'),
 
   youtube: {
-    search: (query: string) => ipcRenderer.invoke('youtube-search', query),
-    getStream: (videoId: string) => ipcRenderer.invoke('youtube-stream', videoId)
+    // FIX: Add 'region' parameter (optional)
+    search: (query: string, region?: string) => ipcRenderer.invoke('youtube-search', query, region),
+    // FIX: Add 'quality' parameter (optional)
+    getStream: (videoId: string, quality?: string) =>
+      ipcRenderer.invoke('youtube-stream', videoId, quality)
   }
 })
