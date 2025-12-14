@@ -1,12 +1,12 @@
-import { useState } from 'react'
-import { Home, Search, Library, Plus, Heart, Music } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Home, Search, Library, Plus, Heart, Music, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { useSpotifyPlaylists } from '@/hooks/useSpotifyPlaylists'
 import { SearchDialog } from '../components/SearchDialog.tsx'
-import { Link, useNavigate } from 'react-router-dom' // Ensure Link is imported
+import { Link } from 'react-router-dom'
 
 interface SidebarProps {
   className?: string
@@ -16,6 +16,25 @@ export function Sidebar({ className }: SidebarProps) {
   const [searchOpen, setSearchOpen] = useState(false)
   const { isAuthenticated } = useSpotifyAuth()
   const { playlists, likedSongs } = useSpotifyPlaylists()
+
+  // --- SHORTCUT: Press 'K' to Search ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      // Ignore if typing in an input
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return
+      }
+
+      if (e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   return (
     <>
@@ -35,25 +54,37 @@ export function Sidebar({ className }: SidebarProps) {
               variant="ghost"
               className="w-full justify-start gap-3 text-sidebar-foreground hover:text-foreground"
               onClick={() => setSearchOpen(true)}
+              title="Search (Press 'K')"
             >
               <Search className="h-5 w-5" />
               Search
             </Button>
+
+            <Link to="/downloads" className="w-full block">
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-3  text-sidebar-foreground hover:text-foreground"
+              >
+                <Download className="h-5 w-5" />
+                Downloads
+              </Button>
+            </Link>
           </div>
         </div>
 
         <div className="flex-1 rounded-lg bg-sidebar">
           <div className="flex items-center justify-between p-4">
-            {/* FIX: Wrapped this button in a Link to /library */}
-            <Link to="/library" className="w-full">
-              <Button
-                variant="ghost"
-                className="w-full justify-start gap-3 p-0 text-sidebar-foreground hover:text-foreground"
-              >
-                <Library className="h-5 w-5" />
-                Your Library
-              </Button>
-            </Link>
+            <div className="space-y-1 w-full">
+              <Link to="/library" className="w-full block">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start gap-3 p-0 text-sidebar-foreground hover:text-foreground"
+                >
+                  <Library className="h-5 w-5" />
+                  Your Library
+                </Button>
+              </Link>
+            </div>
 
             <Button
               size="icon"
@@ -64,7 +95,7 @@ export function Sidebar({ className }: SidebarProps) {
             </Button>
           </div>
 
-          <ScrollArea className="h-[calc(100%-80px)] px-2">
+          <ScrollArea className="h-[calc(100%-120px)] px-2">
             <div className="space-y-1 p-2">
               {isAuthenticated && likedSongs.length > 0 && (
                 <Link to="/liked-songs" className="block">

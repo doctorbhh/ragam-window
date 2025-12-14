@@ -12,7 +12,7 @@ export default function Layout() {
         </div>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto bg-background scrollbar-thin scrollbar-thumb-secondary scrollbar-track-transparent">
+        <main className="flex-1 overflow-y-auto bg-background scrollbar-thin scrollbar-thumb-secondary scrollbar-track-transparent ">
           {/* FIX: Added 'pb-32' (padding-bottom: 8rem) 
              This ensures the last item in your list scrolls ABOVE the player bar.
           */}

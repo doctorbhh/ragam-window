@@ -1,4 +1,3 @@
-// src/pages/Settings.tsx
 import { useEffect, useState } from 'react'
 import {
   Server,
@@ -7,7 +6,7 @@ import {
   Signal,
   AlertTriangle,
   Globe,
-  MapPin // NEW ICON
+  MapPin // FIX: Added missing import
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -40,8 +39,8 @@ import {
   setAudioQuality,
   getSearchProvider,
   setSearchProvider,
-  getSearchRegion, // NEW IMPORT
-  setSearchRegion // NEW IMPORT
+  getSearchRegion,
+  setSearchRegion
 } from '@/services/instanceService'
 
 interface Instance {
@@ -66,7 +65,7 @@ const Settings = () => {
   const [currentInstance, setCurrentInstance] = useState(DEFAULT_INSTANCE)
   const [currentQuality, setCurrentQuality] = useState('high')
   const [currentProvider, setCurrentProvider] = useState('youtube')
-  const [currentRegion, setCurrentRegion] = useState('IN') // NEW STATE
+  const [currentRegion, setCurrentRegion] = useState('IN')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -74,7 +73,7 @@ const Settings = () => {
     setCurrentInstance(getSavedInstance())
     setCurrentQuality(getAudioQuality())
     setCurrentProvider(getSearchProvider())
-    setCurrentRegion(getSearchRegion()) // LOAD SAVED
+    setCurrentRegion(getSearchRegion())
   }, [])
 
   const loadInstances = async () => {
@@ -112,7 +111,6 @@ const Settings = () => {
     toast.success(`Search provider switched to ${value === 'jiosaavn' ? 'JioSaavn' : 'YouTube'}`)
   }
 
-  // NEW HANDLER
   const handleRegionChange = (value: string) => {
     setSearchRegion(value)
     setCurrentRegion(value)
@@ -143,14 +141,14 @@ const Settings = () => {
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="youtube">YouTube (Piped + Invidious)</SelectItem>
+                <SelectItem value="youtube">YouTube </SelectItem>
                 <SelectItem value="jiosaavn">JioSaavn (Fast & Direct)</SelectItem>
               </SelectContent>
             </Select>
           </CardContent>
         </Card>
 
-        {/* NEW: Region Settings */}
+        {/* Region Settings */}
         <Card className="border-border/50 bg-card/50 backdrop-blur">
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -175,7 +173,6 @@ const Settings = () => {
           </CardContent>
         </Card>
 
-        {/* ... Existing Instance, Quality, and Danger Zone Cards (Keep them exactly as they were) ... */}
         {/* Audio Quality Settings */}
         <Card className="border-border/50 bg-card/50 backdrop-blur">
           <CardHeader>

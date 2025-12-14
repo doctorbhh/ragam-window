@@ -31,7 +31,7 @@ export const getAudioUrlForTrack = async (track: SpotifyTrack): Promise<string> 
 export const smartSearch = async (query: string) => {
   const provider = getSearchProvider()
   if (provider === 'jiosaavn') {
-    return await searchJioSaavn(query)
+    return await searchJioSaavnWithRetry(query)
   } else {
     return await searchYouTube(query)
   }
@@ -86,23 +86,77 @@ export const searchYouTube = async (query: string) => {
 const getJioSaavnAudioUrl = async (track: SpotifyTrack): Promise<string> => {
   if (track.url) return track.url
 
-  // 1. Construct Query
-  const artistName = track.artists?.[0]?.name || ''
-  const query = `${track.name} ${artistName}`.trim()
+  let results: any[] = []
 
-  // 2. Search
-  let results = await searchJioSaavn(query)
+  // --- ATTEMPT 1: Strict Search (Name + Artist) ---
+  // e.g. "Singari - From Dude Sai Abhyankkar"
+  try {
+    const artistName = track.artists?.[0]?.name || ''
+    const query1 = `${track.name} ${artistName}`.trim()
+    console.log(`[JioSaavn] Attempt 1 (Strict): "${query1}"`)
 
-  // 3. Fallback: Search by name only if specific search fails
+    if (query1) {
+      results = await searchJioSaavn(query1)
+    }
+    console.log(`[DEBUG] After Attempt 1: results = ${results ? results.length : 'undefined'}`) // NEW: Check exact state
+  } catch (error) {
+    console.warn('[JioSaavn] Attempt 1 failed:', error)
+  }
+
+  // --- ATTEMPT 2: Loose Search (Name Only) ---
+  // e.g. "Singari - From Dude"
+  // If first attempt returned NO results (empty array), retry with just the song name
+  console.log(
+    `[DEBUG] Pre-Attempt 2 check: !results=${!results}, length=0?=${(results || []).length === 0}`
+  ) // NEW: Break down condition
   if (!results || results.length === 0) {
-    results = await searchJioSaavn(track.name)
+    try {
+      const query2 = (track.name || '').trim()
+      console.log(`[JioSaavn] Attempt 2 (Name Only): "${query2}"`)
+
+      if (query2) {
+        results = await searchJioSaavn(query2)
+      }
+      console.log(`[DEBUG] After Attempt 2: results = ${results ? results.length : 'undefined'}`) // NEW
+    } catch (error) {
+      console.warn('[JioSaavn] Attempt 2 failed:', error)
+    }
   }
 
-  if (results.length > 0) {
-    return results[0].url! // Return best match URL
+  // --- ATTEMPT 3: Clean Search (Remove "From Movie" / "feat") ---
+  // e.g. "Singari" (Removes "- From Dude")
+  // If even the name search failed, try stripping extra chars
+  console.log(
+    `[DEBUG] Pre-Attempt 3 check: !results=${!results}, length=0?=${(results || []).length === 0}`
+  ) // NEW
+  if (!results || results.length === 0) {
+    try {
+      // Split by common separators: '(', '-', '[', 'feat'
+      // "Singari - From Dude" -> "Singari "
+      const cleanName = track.name.split(/[\(\-\[]|feat\./i)[0].trim()
+
+      // Only retry if cleaning actually changed the name
+      if (cleanName && cleanName !== track.name) {
+        console.log(`[JioSaavn] Attempt 3 (Clean Name): "${cleanName}"`)
+        results = await searchJioSaavn(cleanName)
+        console.log(`[DEBUG] After Attempt 3: results = ${results ? results.length : 'undefined'}`) // NEW
+      } else {
+        console.log(`[DEBUG] Skipped Attempt 3: cleanName="${cleanName}" unchanged from track.name`) // NEW: If no change
+      }
+    } catch (error) {
+      console.warn('[JioSaavn] Attempt 3 failed:', error)
+    }
   }
 
-  throw new Error('Track not found on JioSaavn')
+  // Final Check
+  console.log(`[DEBUG] Final results: ${results ? results.length : 'undefined'}`) // NEW
+  if (!results || results.length === 0) {
+    console.error('JioSaavn URL fetch error: Track not found after 3 retries.')
+    throw new Error('Track not found on JioSaavn')
+  }
+
+  // Return the URL of the best match
+  return results[0].url
 }
 
 const searchJioSaavn = async (query: string) => {
@@ -172,4 +226,58 @@ const searchJioSaavn = async (query: string) => {
     console.error('JioSaavn search error:', e)
     return []
   }
+}
+
+const searchJioSaavnWithRetry = async (originalQuery: string): Promise<any[]> => {
+  let results: any[] = []
+
+  // --- ATTEMPT 1: Raw Query ---
+  try {
+    console.log(`[JioSaavn Smart] Attempt 1 (Raw): "${originalQuery}"`)
+    results = await searchJioSaavn(originalQuery)
+    console.log(`[JioSaavn Smart] Attempt 1: ${results.length} results`)
+  } catch (error) {
+    console.warn('[JioSaavn Smart] Attempt 1 failed:', error)
+  }
+
+  // --- ATTEMPT 2: Name-Only (Strip Trailing Artist/Movie/Song) ---
+  if (!results || results.length === 0) {
+    try {
+      // Heuristic: Take everything before the last major separator (e.g., " - ", " by ", " song", " from ")
+      const separators = /[\s\-]by[\s\-]|[\s\-]from[\s\-]|[\s\-]song|[\s\-]feat\.?/i
+      const query2 = originalQuery.split(separators)[0].trim()
+      console.log(`[JioSaavn Smart] Attempt 2 (Name-Only): "${query2}"`)
+
+      if (query2 && query2 !== originalQuery) {
+        // Avoid redundant call
+        results = await searchJioSaavn(query2)
+        console.log(`[JioSaavn Smart] Attempt 2: ${results.length} results`)
+      }
+    } catch (error) {
+      console.warn('[JioSaavn Smart] Attempt 2 failed:', error)
+    }
+  }
+
+  // --- ATTEMPT 3: Cleaned (Remove Parentheticals/Dashes) ---
+  if (!results || results.length === 0) {
+    try {
+      // Aggressive clean: Split by common extras and take first chunk
+      const cleanQuery = originalQuery.split(/[\(\)\-\[\]]|from|feat|song/i)[0].trim()
+      console.log(`[JioSaavn Smart] Attempt 3 (Clean): "${cleanQuery}"`)
+
+      if (cleanQuery && cleanQuery !== originalQuery && cleanQuery !== (results?.[0]?.name || '')) {
+        results = await searchJioSaavn(cleanQuery)
+        console.log(`[JioSaavn Smart] Attempt 3: ${results.length} results`)
+      }
+    } catch (error) {
+      console.warn('[JioSaavn Smart] Attempt 3 failed:', error)
+    }
+  }
+
+  // Final fallback: If still empty, log and return []
+  if (!results || results.length === 0) {
+    console.error('[JioSaavn Smart] No results after 3 attempts for:', originalQuery)
+  }
+
+  return results
 }

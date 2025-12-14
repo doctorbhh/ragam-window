@@ -1,9 +1,11 @@
 import React, { createContext, useState, useContext, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { getAudioUrlForTrack } from '@/services/youtubeService'
+import { smartSearch } from '@/services/youtubeService'
+import { getAudioQuality } from '@/services/instanceService'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { trackListening } from '@/services/firebaseRecommendations'
 import { SpotifyTrack } from '@/types/spotify'
+import { useDownloads } from '@/context/DownloadContext' // Ensure this exists
 
 // Define the shape of the Context
 interface PlayerContextType {
@@ -16,6 +18,8 @@ interface PlayerContextType {
   isLoading: boolean
   isShuffled: boolean
   repeatMode: 'off' | 'one' | 'all'
+  // NEW: Search results for the current track
+  alternatives: any[]
   playTrack: (track: SpotifyTrack) => Promise<void>
   togglePlayPause: () => void
   nextTrack: () => void
@@ -28,6 +32,8 @@ interface PlayerContextType {
   toggleShuffle: () => void
   toggleRepeat: () => void
   downloadTrack: (track: SpotifyTrack) => Promise<void>
+  // NEW: Function to manually swap audio source
+  changeSource: (sourceItem: any) => Promise<void>
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined)
@@ -50,6 +56,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [volume, setVolumeState] = useState(1)
   const [isLoading, setIsLoading] = useState(false)
 
+  // NEW: Store alternative audio sources found for the current song
+  const [alternatives, setAlternatives] = useState<any[]>([])
+
   const [isShuffled, setIsShuffled] = useState(false)
   const [repeatMode, setRepeatMode] = useState<'off' | 'one' | 'all'>('off')
 
@@ -60,6 +69,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const preloadingIds = useRef<Set<string>>(new Set())
 
   const { user } = useSpotifyAuth()
+
+  // FIX: Get the download function from the Download Context
+  // Note: PlayerProvider MUST be wrapped inside DownloadProvider in App.tsx for this to work
+  const { startDownload } = useDownloads()
 
   // Keep originalQueue in sync when songs are added (if not shuffled)
   useEffect(() => {
@@ -89,8 +102,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const handleError = (e: Event) => {
       console.error('Audio error:', e)
       setIsLoading(false)
-      // Auto-skip error tracks after 2 seconds
-      setTimeout(() => nextTrack(), 2000)
+      // Auto-skip error tracks after 1 second
+      setTimeout(() => nextTrack(), 1000)
     }
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
@@ -110,53 +123,22 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [queue, currentTrack, repeatMode])
 
-  // --- PRELOAD FUNCTION ---
-  const preloadNextTrack = async () => {
-    if (queue.length === 0 || repeatMode === 'one') return
-
-    const currentIndex = queue.findIndex((t) => t.id === currentTrack?.id)
-    let nextIndex = currentIndex + 1
-
-    // Handle end of queue
-    if (nextIndex >= queue.length) {
-      if (repeatMode === 'all') {
-        nextIndex = 0
-      } else {
-        return // Nothing to preload
-      }
+  // Helper: Fetch actual stream URL from a search result item
+  const fetchStreamUrl = async (item: any) => {
+    // If it's JioSaavn or already has a direct URL
+    if (item.url && item.url.startsWith('http')) {
+      // For JioSaavn, duration is usually in ms
+      const durationSec = item.duration_ms ? item.duration_ms / 1000 : 0
+      return { url: item.url, duration: durationSec }
     }
 
-    const nextTrackToLoad = queue[nextIndex]
-
-    // Checks: Exists? Already has URL? Already loading?
-    if (!nextTrackToLoad || nextTrackToLoad.url || preloadingIds.current.has(nextTrackToLoad.id)) {
-      return
+    // If it's YouTube, we need to extract the stream using the backend
+    if (item.id) {
+      const quality = getAudioQuality()
+      const streamData = await window.electron.youtube.getStream(item.id, quality)
+      if (streamData?.url) return streamData
     }
-
-    console.log(`Preloading next track: ${nextTrackToLoad.name}`)
-    preloadingIds.current.add(nextTrackToLoad.id)
-
-    try {
-      // Fetch the URL in the background
-      const url = await getAudioUrlForTrack(nextTrackToLoad)
-
-      // Mutate object reference in state (safe for simple caching)
-      nextTrackToLoad.url = url
-      console.log(`Preload complete for: ${nextTrackToLoad.name}`)
-    } catch (error) {
-      console.error(`Failed to preload ${nextTrackToLoad.name}:`, error)
-    } finally {
-      preloadingIds.current.delete(nextTrackToLoad.id)
-    }
-  }
-
-  const trackListeningData = async (track: SpotifyTrack) => {
-    if (!user) return
-    try {
-      await trackListening(user.id, track)
-    } catch (e) {
-      console.error(e)
-    }
+    throw new Error('No stream URL found')
   }
 
   const playTrack = async (track: SpotifyTrack) => {
@@ -171,38 +153,92 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     audioRef.current.pause()
     setCurrentTrack(track)
     setIsLoading(true)
+    setAlternatives([]) // Reset alternatives for new track
 
     try {
-      let audioUrl = track.url
+      // 1. Search for potential audio sources (Alternatives)
+      const artistName = track.artists?.[0]?.name || ''
+      const query = `${track.name} ${artistName} song`
 
-      // If URL is missing, fetch it
-      if (!audioUrl) {
+      console.log('Searching sources for:', query)
+      const results = await smartSearch(query)
+      setAlternatives(results)
+
+      if (results.length === 0) {
+        throw new Error('No results found')
+      }
+
+      // 2. INTELLIGENT FALLBACK LOOP
+      let successfulUrl = null
+
+      // Iterate through results until one works
+      for (const result of results) {
         try {
-          audioUrl = await getAudioUrlForTrack(track)
-          track.url = audioUrl // Cache it
-        } catch (err) {
-          // Fallback to Spotify 30s preview if YouTube fails
-          // @ts-ignore - preview_url might be missing from type def but often exists
-          if (track.preview_url) {
-            // @ts-ignore
-            audioUrl = track.preview_url
-            toast.info('Playing preview (Full audio unavailable)')
-          } else {
-            throw new Error('No audio source found')
+          console.log(`Trying source: ${result.title || result.name} (${result.id})`)
+          const streamData = await fetchStreamUrl(result)
+
+          // CHECK 1: Is the URL valid?
+          if (!streamData || !streamData.url) continue
+
+          // CHECK 2: Is it a "Short" version / Preview? (Less than 45 seconds)
+          // Most full songs are > 2 mins. This filters out 30s previews/shorts.
+          if (streamData.duration && streamData.duration < 30) {
+            console.warn(`Skipping short version (${streamData.duration}s): ${result.title}`)
+            continue
           }
+
+          // If we passed checks, use this source!
+          successfulUrl = streamData.url
+          break // Exit loop, we found a song
+        } catch (e) {
+          console.warn(`Source failed: ${result.title}`, e)
+          // Continue to next result...
         }
       }
 
-      if (audioUrl) {
-        audioRef.current.src = audioUrl
+      if (successfulUrl) {
+        track.url = successfulUrl // Cache valid URL
+        audioRef.current.src = successfulUrl
         audioRef.current.volume = volume
         await audioRef.current.play()
         setIsPlaying(true)
         trackListeningData(track)
+      } else {
+        // All sources failed
+        throw new Error('All audio sources failed or were too short')
       }
     } catch (error) {
       console.error('Playback error:', error)
       toast.error(`Could not play: ${track.name}`)
+      setIsLoading(false)
+      // Auto-skip logic is handled by the 'error' event listener in useEffect
+    }
+  }
+
+  // NEW: Manual Source Switching
+  const changeSource = async (sourceItem: any) => {
+    if (!currentTrack) return
+
+    setIsLoading(true)
+    audioRef.current.pause()
+
+    try {
+      const streamData = await fetchStreamUrl(sourceItem)
+      if (streamData && streamData.url) {
+        audioRef.current.src = streamData.url
+        await audioRef.current.play()
+        setIsPlaying(true)
+
+        // Update current track info to match new source URL
+        if (currentTrack) {
+          currentTrack.url = streamData.url
+        }
+        toast.success(`Switched to: ${sourceItem.title || sourceItem.name}`)
+      }
+    } catch (e) {
+      toast.error('Failed to play selected source')
+      setIsPlaying(false)
+    } finally {
       setIsLoading(false)
     }
   }
@@ -336,28 +372,59 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     toast.info(messages[newMode])
   }
 
-  const downloadTrack = async (track: SpotifyTrack) => {
-    if (!track) return
-    // @ts-ignore
-    let downloadUrl = track.url || track.preview_url
+  // --- PRELOAD FUNCTION ---
+  const preloadNextTrack = async () => {
+    if (queue.length === 0 || repeatMode === 'one') return
 
-    if (!downloadUrl) {
-      try {
-        toast.info('Preparing download...')
-        downloadUrl = await getAudioUrlForTrack(track)
-      } catch (e) {
-        toast.error('Download failed')
-        return
-      }
+    const currentIndex = queue.findIndex((t) => t.id === currentTrack?.id)
+    let nextIndex = currentIndex + 1
+
+    if (nextIndex >= queue.length) {
+      if (repeatMode === 'all') nextIndex = 0
+      else return
     }
 
-    const a = document.createElement('a')
-    a.href = downloadUrl
-    a.download = `${track.name}.mp3`
-    a.target = '_blank'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    const nextTrackToLoad = queue[nextIndex]
+
+    if (!nextTrackToLoad || nextTrackToLoad.url || preloadingIds.current.has(nextTrackToLoad.id)) {
+      return
+    }
+
+    console.log(`Preloading next track: ${nextTrackToLoad.name}`)
+    preloadingIds.current.add(nextTrackToLoad.id)
+
+    try {
+      const artistName = nextTrackToLoad.artists?.[0]?.name || ''
+      const query = `${nextTrackToLoad.name} ${artistName} song`
+      const results = await smartSearch(query)
+
+      if (results.length > 0) {
+        const streamData = await fetchStreamUrl(results[0])
+        if (streamData && streamData.url) {
+          nextTrackToLoad.url = streamData.url
+          console.log(`Preload complete for: ${nextTrackToLoad.name}`)
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to preload ${nextTrackToLoad.name}:`, error)
+    } finally {
+      preloadingIds.current.delete(nextTrackToLoad.id)
+    }
+  }
+
+  const trackListeningData = async (track: SpotifyTrack) => {
+    if (!user) return
+    try {
+      await trackListening(user.id, track)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  // FIX: Updated to use the Download Context
+  const downloadTrack = async (track: SpotifyTrack) => {
+    if (!track) return
+    await startDownload(track)
   }
 
   const clearQueue = () => {
@@ -377,6 +444,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         isLoading,
         isShuffled,
         repeatMode,
+        alternatives,
         playTrack,
         togglePlayPause,
         nextTrack,
@@ -388,7 +456,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         clearQueue,
         toggleShuffle,
         toggleRepeat,
-        downloadTrack
+        downloadTrack,
+        changeSource
       }}
     >
       {children}

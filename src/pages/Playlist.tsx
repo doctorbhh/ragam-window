@@ -1,102 +1,110 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { useSpotifyAuth } from "@/context/SpotifyAuthContext";
-import { getPlaylist, getAllPlaylistTracks } from "@/services/spotifyservice";
-import { SpotifyPlaylist, SpotifyTrack } from "@/types/spotify";
-import TrackItem from "@/components/TrackItem";
-import { Play, Pause, Clock, Shuffle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { usePlayer } from "@/context/PlayerContext";
-import { toast } from "sonner";
+import { useEffect, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
+import { getPlaylist, getAllPlaylistTracks } from '@/services/spotifyservice'
+import { SpotifyPlaylist, SpotifyTrack } from '@/types/spotify'
+import TrackItem from '@/components/TrackItem'
+import { Play, Pause, Clock, Shuffle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { usePlayer } from '@/context/PlayerContext'
+import { toast } from 'sonner'
 
 const Playlist = () => {
-  const { playlistId } = useParams<{ playlistId: string }>();
-  const { spotifyToken } = useSpotifyAuth();
-  const { currentTrack, isPlaying, playTrack, togglePlayPause, addToQueue, addManyToQueue, clearQueue } = usePlayer();
- 
-  const [playlist, setPlaylist] = useState<SpotifyPlaylist | null>(null);
-  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetchingAllTracks, setFetchingAllTracks] = useState(false);
+  const { playlistId } = useParams<{ playlistId: string }>()
+  const { spotifyToken } = useSpotifyAuth()
+  const {
+    currentTrack,
+    isPlaying,
+    playTrack,
+    togglePlayPause,
+    addToQueue,
+    addManyToQueue,
+    clearQueue
+  } = usePlayer()
+
+  const [playlist, setPlaylist] = useState<SpotifyPlaylist | null>(null)
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([])
+  const [loading, setLoading] = useState(true)
+  const [fetchingAllTracks, setFetchingAllTracks] = useState(false)
 
   useEffect(() => {
     if (spotifyToken && playlistId) {
-      fetchPlaylistDetails();
+      fetchPlaylistDetails()
     }
-  }, [spotifyToken, playlistId]);
+  }, [spotifyToken, playlistId])
 
   const fetchPlaylistDetails = async () => {
-    setLoading(true);
+    setLoading(true)
     try {
       // Fetch playlist details
-      const playlistData = await getPlaylist(spotifyToken!, playlistId!);
-      setPlaylist(playlistData);
+      const playlistData = await getPlaylist(spotifyToken!, playlistId!)
+      setPlaylist(playlistData)
 
       // Show loading for all tracks
-      setFetchingAllTracks(true);
-      toast.info(`Fetching all ${playlistData.tracks.total} tracks...`);
-      
+      setFetchingAllTracks(true)
+      toast.info(`Fetching all ${playlistData.tracks.total} tracks...`)
+
       // Fetch ALL playlist tracks
-      const allTracks = await getAllPlaylistTracks(spotifyToken!, playlistId!);
-      setTracks(allTracks.map(item => item.track));
-      
-      toast.success(`Loaded ${allTracks.length} tracks`);
+      const allTracks = await getAllPlaylistTracks(spotifyToken!, playlistId!)
+      setTracks(allTracks.map((item) => item.track))
+
+      toast.success(`Loaded ${allTracks.length} tracks`)
     } catch (error) {
-      console.error("Error fetching playlist:", error);
-      toast.error("Failed to load playlist");
+      console.error('Error fetching playlist:', error)
+      toast.error('Failed to load playlist')
     } finally {
-      setLoading(false);
-      setFetchingAllTracks(false);
+      setLoading(false)
+      setFetchingAllTracks(false)
     }
-  };
+  }
 
   const playFirstTrack = () => {
     if (tracks.length > 0) {
-      playTrack(tracks[0]);
+      playTrack(tracks[0])
       // Add remaining tracks to queue
       if (tracks.length > 1) {
-        addManyToQueue(tracks.slice(1));
+        addManyToQueue(tracks.slice(1))
       }
     }
-  };
+  }
 
   const handleShuffle = () => {
-    if (tracks.length === 0) return;
-    
+    if (tracks.length === 0) return
+
     // Shuffle array using Fisher-Yates algorithm
-    const shuffled = [...tracks];
+    const shuffled = [...tracks]
     for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
     }
-    
+
     // Clear current queue and play first shuffled track
-    clearQueue();
-    playTrack(shuffled[0]);
-    
+    clearQueue()
+    playTrack(shuffled[0])
+
     // Add remaining shuffled tracks to queue
     if (shuffled.length > 1) {
-      addManyToQueue(shuffled.slice(1));
+      addManyToQueue(shuffled.slice(1))
     }
-    
-    toast.success("Shuffled playlist and added to queue");
-  };
 
-  const isPlaylistPlaying = isPlaying && tracks.some(track => track.id === currentTrack?.id);
+    toast.success('Shuffled playlist and added to queue')
+  }
+
+  const isPlaylistPlaying = isPlaying && tracks.some((track) => track.id === currentTrack?.id)
 
   const handlePlayPause = () => {
     if (isPlaylistPlaying) {
-      togglePlayPause();
+      togglePlayPause()
     } else {
-      playFirstTrack();
+      playFirstTrack()
     }
-  };
+  }
 
   if (loading) {
     return (
       <div>
-        <div className="flex items-start gap-6 mb-8">
+        <div className="flex items-start gap-6 mb-8 pt-5">
           <Skeleton className="h-44 w-44 rounded-lg" />
           <div className="flex-1">
             <Skeleton className="h-5 w-20 mb-2" />
@@ -104,23 +112,25 @@ const Playlist = () => {
             <Skeleton className="h-5 w-48" />
           </div>
         </div>
-       
+
         <div className="space-y-2 mt-8">
-          {Array(10).fill(null).map((_, i) => (
-            <Skeleton key={i} className="h-14 w-full" />
-          ))}
+          {Array(10)
+            .fill(null)
+            .map((_, i) => (
+              <Skeleton key={i} className="h-14 w-full" />
+            ))}
         </div>
       </div>
-    );
+    )
   }
 
   if (!playlist) {
-    return <div className="text-center py-10">Playlist not found</div>;
+    return <div className="text-center py-10">Playlist not found</div>
   }
 
   return (
     <div>
-      <header className="flex items-center gap-6 mb-8">
+      <header className="flex items-center gap-6 mb-8 pt-5">
         <div className="h-44 w-44 bg-gray-800/50 rounded-lg overflow-hidden shadow-lg">
           {playlist.images?.[0] && (
             <img
@@ -157,9 +167,7 @@ const Playlist = () => {
           <Shuffle size={20} />
         </Button>
         {fetchingAllTracks && (
-          <span className="text-sm text-muted-foreground">
-            Loading all tracks...
-          </span>
+          <span className="text-sm text-muted-foreground">Loading all tracks...</span>
         )}
       </div>
 
@@ -193,7 +201,7 @@ const Playlist = () => {
         )}
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default Playlist;
+export default Playlist

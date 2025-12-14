@@ -50,6 +50,9 @@ const runYtDlp = (args: string[]): Promise<any> => {
   })
 }
 
+// --- DOWNLOAD MANAGER VARIABLES ---
+const pendingDownloads = new Map<string, { filename: string; saveAs: boolean }>()
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
@@ -84,6 +87,48 @@ function createWindow() {
     }
   )
 
+  // --- DOWNLOAD HANDLER ---
+  win.webContents.session.on('will-download', (event, item, webContents) => {
+    const url = item.getURL()
+    const options = pendingDownloads.get(url) || { filename: 'audio.mp3', saveAs: false }
+
+    if (options.filename) {
+      item.setSavePath(path.join(app.getPath('downloads'), options.filename))
+    }
+
+    if (options.saveAs) {
+      const result = dialog.showSaveDialogSync(win!, {
+        defaultPath: options.filename,
+        filters: [{ name: 'Audio Files', extensions: ['mp3', 'm4a'] }]
+      })
+      if (result) item.setSavePath(result)
+      else {
+        item.cancel()
+        return
+      }
+    }
+
+    item.on('updated', (event, state) => {
+      if (state === 'progressing' && !item.isPaused()) {
+        win?.webContents.send('download-progress', {
+          url: url,
+          progress: item.getReceivedBytes() / item.getTotalBytes(),
+          received: item.getReceivedBytes(),
+          total: item.getTotalBytes()
+        })
+      }
+    })
+
+    item.on('done', (event, state) => {
+      pendingDownloads.delete(url)
+      win?.webContents.send('download-complete', {
+        url: url,
+        state: state,
+        path: item.getSavePath()
+      })
+    })
+  })
+
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
   } else {
@@ -95,20 +140,53 @@ function createWindow() {
 // --- 1. YOUTUBE HANDLERS (Native execFile) ---
 // ==========================================================
 
+// --- UPDATED: SEARCH VIDEO (RETURN TOP 5) ---
+ipcMain.handle('youtube-search-video', async (_, query) => {
+  try {
+    console.log(`[YouTube Video Search] Searching: ${query}`)
+
+    // 'ytsearch5:' tells yt-dlp to return the top 5 results
+    const args = [
+      `ytsearch5:${query}`,
+      '--dump-single-json',
+      '--flat-playlist', // Get metadata only (fast)
+      '--no-warnings',
+      '--no-check-certificate'
+    ]
+
+    const output = await runYtDlp(args)
+
+    if (!output || !output.entries) {
+      return []
+    }
+
+    // Map all 5 entries
+    return output.entries.map((video: any) => ({
+      id: video.id,
+      title: video.title,
+      thumbnail: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+      channel: video.uploader,
+      duration: video.duration
+    }))
+  } catch (error: any) {
+    console.error('[YouTube Video Search] Error:', error)
+    return []
+  }
+})
+
 ipcMain.handle('youtube-search', async (_, query, region = 'US') => {
   try {
     console.log(`[YouTube Music] Searching: ${query} (Region: ${region})`)
 
-    // 1. Construct the YouTube Music Search URL
-    // This forces yt-dlp to scrape music.youtube.com for official audio
+    // 1. Construct the YouTube Music Search URL (Scrapes music.youtube.com)
     const searchUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`
 
     const args = [
       searchUrl,
       '--dump-single-json',
       '--playlist-items',
-      '1,2,3,4,5', // Limit to top 5 results
-      '--flat-playlist', // Get metadata quickly without downloading
+      '1,2,3,4,5',
+      '--flat-playlist',
       '--no-warnings',
       '--no-check-certificate',
       '--geo-bypass-country',
@@ -123,15 +201,12 @@ ipcMain.handle('youtube-search', async (_, query, region = 'US') => {
     return output.entries.map((entry: any) => ({
       id: entry.id,
       title: entry.title,
-      // YTM results usually put the artist in 'uploader' or 'artist' fields
       channelTitle: entry.uploader || entry.artist || 'YouTube Music',
       duration: entry.duration,
-      // Force high-res thumbnail for YTM
       thumbnail: `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
       artists: [{ name: entry.uploader || entry.artist || 'Unknown' }]
     }))
   } catch (error: any) {
-    // FALLBACK: If YTM search fails (sometimes scraping is blocked), fall back to standard ytsearch
     console.warn('YTM Search failed, falling back to standard ytsearch:', error.message)
     try {
       const fbArgs = [
@@ -143,7 +218,7 @@ ipcMain.handle('youtube-search', async (_, query, region = 'US') => {
         '--no-warnings',
         '--no-check-certificate',
         '--geo-bypass-country',
-        region // Apply User Region to Fallback too
+        region
       ]
       const fbOutput = await runYtDlp(fbArgs)
 
@@ -169,7 +244,6 @@ ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
     console.log(`[YouTube] Fetching Stream for: ${videoId} (Quality: ${quality})`)
     const url = `https://www.youtube.com/watch?v=${videoId}`
 
-    // Map quality settings to yt-dlp format selectors
     let formatSelector = 'bestaudio/best'
     if (quality === 'medium') {
       formatSelector = 'bestaudio[abr<=128]/bestaudio'
@@ -197,8 +271,59 @@ ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
     }
   } catch (error: any) {
     console.error('[YouTube] Stream Extraction Error:', error)
-    // Don't show dialog for stream errors to avoid interrupting playback flow too aggressively
     return null
+  }
+})
+
+// --- NEW HANDLER: GET VIDEO STREAM (HLS SUPPORT) ---
+ipcMain.handle('youtube-video-url', async (_, videoId) => {
+  try {
+    console.log(`[YouTube] Fetching HLS Stream for: ${videoId}`)
+    const url = `https://www.youtube.com/watch?v=${videoId}`
+
+    const args = [url, '--dump-single-json', '--no-warnings', '--no-check-certificate']
+
+    const output = await runYtDlp(args)
+
+    let streamUrl = output.manifest_url
+
+    if (!streamUrl && output.formats) {
+      const hlsFormat = output.formats.find(
+        (f: any) => f.protocol === 'm3u8' || f.protocol === 'm3u8_native'
+      )
+      if (hlsFormat) {
+        streamUrl = hlsFormat.url
+      }
+    }
+
+    if (!streamUrl) {
+      console.log('No HLS found, falling back to MP4')
+      const mp4Format = output.formats
+        .reverse()
+        .find((f: any) => f.ext === 'mp4' && f.acodec !== 'none' && f.vcodec !== 'none')
+      streamUrl = mp4Format ? mp4Format.url : output.url
+    }
+
+    if (!streamUrl) throw new Error('No video stream found')
+
+    return {
+      url: streamUrl,
+      title: output.title,
+      isHls: streamUrl.includes('.m3u8')
+    }
+  } catch (error: any) {
+    console.error('[YouTube] Video Stream Error:', error)
+    return null
+  }
+})
+
+ipcMain.handle('download-start', async (_, { url, filename, saveAs }) => {
+  try {
+    pendingDownloads.set(url, { filename, saveAs })
+    win?.webContents.downloadURL(url)
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
   }
 })
 
@@ -237,22 +362,16 @@ ipcMain.handle('spotify-login', async () => {
     const checkCookie = async () => {
       if (isResolved || authWindow.isDestroyed()) return
       try {
-        const cookies = await authSession.cookies.get({
-          name: 'sp_dc'
-        })
-
+        const cookies = await authSession.cookies.get({ name: 'sp_dc' })
         if (cookies.length > 0) {
           const currentUrl = authWindow.webContents.getURL()
-
           if (currentUrl.includes('accounts.spotify.com')) {
-            console.log('Login Cookie found! Redirecting to Player...')
             clearInterval(cookieInterval)
-
             await authWindow.loadURL('https://open.spotify.com')
           }
         }
       } catch (error) {
-        console.error('Cookie check error:', error)
+        console.error(error)
       }
     }
 
@@ -260,41 +379,32 @@ ipcMain.handle('spotify-login', async () => {
 
     try {
       authWindow.webContents.debugger.attach('1.3')
-    } catch (err) {
-      console.error('Debugger attach failed', err)
-    }
+    } catch (err) {}
 
     authWindow.webContents.debugger.on('message', async (event, method, params) => {
-      if (method === 'Network.responseReceived') {
-        const url = params.response.url
-        if (url.includes('/api/token')) {
-          try {
-            const responseBody = await authWindow.webContents.debugger.sendCommand(
-              'Network.getResponseBody',
-              { requestId: params.requestId }
-            )
-            if (responseBody.body) {
-              const data = JSON.parse(responseBody.body)
-              if (data.accessToken) {
-                console.log('>>> SUCCESS: Token Sniffed!')
-                isResolved = true
-                resolve(data)
-                setTimeout(() => {
-                  if (!authWindow.isDestroyed()) authWindow.close()
-                }, 500)
-              }
+      if (method === 'Network.responseReceived' && params.response.url.includes('/api/token')) {
+        try {
+          const res = await authWindow.webContents.debugger.sendCommand('Network.getResponseBody', {
+            requestId: params.requestId
+          })
+          if (res.body) {
+            const data = JSON.parse(res.body)
+            if (data.accessToken) {
+              isResolved = true
+              resolve(data)
+              setTimeout(() => {
+                if (!authWindow.isDestroyed()) authWindow.close()
+              }, 500)
             }
-          } catch (err) {
-            /* ignore */
           }
-        }
+        } catch (err) {}
       }
     })
     authWindow.webContents.debugger.sendCommand('Network.enable')
 
     authWindow.on('closed', () => {
       clearInterval(cookieInterval)
-      if (!isResolved) console.log('Auth window closed by user')
+      if (!isResolved) console.log('Auth closed')
     })
   })
 })
