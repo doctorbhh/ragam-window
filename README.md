@@ -1,4 +1,4 @@
-# my-spotify-electron
+# Ragam
 
 An Electron application with React and TypeScript
 
