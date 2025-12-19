@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Home, Search, Library, Plus, Heart, Music, Download } from 'lucide-react'
+import { Home, Search, Library, Plus, Heart, Music, Download, WifiOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -67,6 +67,16 @@ export function Sidebar({ className }: SidebarProps) {
               >
                 <Download className="h-5 w-5" />
                 Downloads
+              </Button>
+            </Link>
+
+            <Link to="/offline" className="w-full block">
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-3 text-sidebar-foreground hover:text-foreground"
+              >
+                <WifiOff className="h-5 w-5" />
+                Offline
               </Button>
             </Link>
           </div>

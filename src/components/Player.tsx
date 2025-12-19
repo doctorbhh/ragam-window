@@ -16,13 +16,15 @@ import {
   MonitorPlay,
   X,
   ListVideo,
-  Settings
+  Settings,
+  Star,
+  Check
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { usePlayer } from '@/context/PlayerContext'
 import Hls from 'hls.js'
@@ -36,6 +38,7 @@ interface VideoModalProps {
 
 const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const hlsRef = useRef<Hls | null>(null) // Use ref to avoid stale closure
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,11 +47,28 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
   const [currentVideoId, setCurrentVideoId] = useState<string | null>(null)
 
   // HLS State
-  const [hlsInstance, setHlsInstance] = useState<Hls | null>(null)
   const [levels, setLevels] = useState<any[]>([])
   const [currentLevel, setCurrentLevel] = useState(-1) // -1 = Auto
 
-  // 1. Initial Search (Finds top 5 videos)
+  // Cleanup function - runs when modal closes
+  useEffect(() => {
+    return () => {
+      console.log('[VideoModal] Cleanup - stopping video and HLS')
+      // Stop video playback
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.src = ''
+        videoRef.current.load()
+      }
+      // Destroy HLS instance to stop streaming
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+    }
+  }, [])
+
+  // Initial Search (Finds top 5 videos)
   useEffect(() => {
     const searchAndPlay = async () => {
       setLoading(true)
@@ -77,9 +97,9 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
   // 2. Load Specific Stream (Helper Function)
   const loadVideoStream = async (videoId: string) => {
     // Cleanup previous HLS if exists
-    if (hlsInstance) {
-      hlsInstance.destroy()
-      setHlsInstance(null)
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
     }
     setLevels([])
     setLoading(true)
@@ -102,7 +122,7 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
 
           hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
             setLevels(data.levels)
-            setHlsInstance(hls)
+            hlsRef.current = hls
             video.play().catch((e) => console.error('Autoplay blocked', e))
           })
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -123,8 +143,8 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
   }
 
   const changeQuality = (levelIndex: number) => {
-    if (hlsInstance) {
-      hlsInstance.currentLevel = levelIndex
+    if (hlsRef.current) {
+      hlsRef.current.currentLevel = levelIndex
       setCurrentLevel(levelIndex)
     }
   }
@@ -294,7 +314,11 @@ export function Player() {
     toggleRepeat,
     downloadTrack,
     alternatives,
-    changeSource
+    changeSource,
+    savedSourceId,
+    saveSourcePreference,
+    clearSourcePreference,
+    clearQueue
   } = usePlayer()
 
   const [isLiked, setIsLiked] = useState(false)
@@ -305,11 +329,9 @@ export function Player() {
   // --- KEYBOARD SHORTCUTS ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
       const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
         return
-      }
 
       switch (e.code) {
         case 'Space':
@@ -332,7 +354,6 @@ export function Player() {
           break
       }
     }
-
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [togglePlayPause, volume, setPlayerVolume, previousTrack, nextTrack])
@@ -356,8 +377,6 @@ export function Player() {
   useEffect(() => {
     setLocalProgress([duration > 0 ? (progress / duration) * 100 : 0])
   }, [progress, duration])
-
-  // Sync local volume with context volume
   useEffect(() => {
     setLocalVolume([volume * 100])
   }, [volume])
@@ -454,10 +473,10 @@ export function Player() {
 
       {/* --- FLOATING PLAYER CONTAINER --- */}
       <div className="fixed bottom-0 sm:bottom-4 left-0 right-0 sm:left-4 sm:right-4 z-50 flex justify-center">
-        <div className="w-full max-w-screen-xl bg-background/80 sm:bg-black/60 backdrop-blur-xl border-t sm:border border-white/5 sm:rounded-2xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300">
-          {/* Progress Bar */}
+        <div className="w-full max-w-screen-xl bg-background/80 sm:bg-black/60 backdrop-blur-xl border-t sm:border border-white/5 sm:rounded-2xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300 relative group/player">
+          {/* Progress Bar - Enlarges on Hover */}
           <div
-            className="w-full h-1 bg-white/5 cursor-pointer group"
+            className="w-full h-1 hover:h-3 bg-white/10 cursor-pointer group transition-all duration-200 ease-out z-20 absolute top-0 left-0 right-0"
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()
               const x = e.clientX - rect.left
@@ -466,14 +485,14 @@ export function Player() {
             }}
           >
             <div
-              className="h-full bg-primary transition-all duration-100 ease-linear group-hover:h-1.5 relative"
+              className="h-full bg-primary transition-all duration-100 ease-linear relative"
               style={{ width: `${localProgress[0]}%` }}
             >
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3 w-3 bg-white rounded-full opacity-0 group-hover:opacity-100 shadow-md transition-opacity" />
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3 w-3 bg-white rounded-full opacity-0 group-hover:opacity-100 shadow-md transition-opacity duration-200 scale-125" />
             </div>
           </div>
 
-          <div className="flex h-20 sm:h-24 items-center justify-between px-4 sm:px-6">
+          <div className="flex h-20 sm:h-24 items-center justify-between px-4 sm:px-6 pt-2">
             {/* LEFT: Track Info */}
             <div className="flex w-[30%] min-w-0 items-center gap-4">
               {currentTrack ? (
@@ -497,9 +516,7 @@ export function Player() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    className={`hidden sm:flex h-9 w-9 shrink-0 hover:bg-white/10 rounded-full transition-colors ${
-                      isLiked ? 'text-primary' : 'text-muted-foreground'
-                    }`}
+                    className={`hidden sm:flex h-9 w-9 shrink-0 hover:bg-white/10 rounded-full transition-colors ${isLiked ? 'text-primary' : 'text-muted-foreground'}`}
                     onClick={() => setIsLiked(!isLiked)}
                   >
                     <Heart className={`h-5 w-5 ${isLiked ? 'fill-current' : ''}`} />
@@ -597,47 +614,108 @@ export function Player() {
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full"
-                      title="Audio Sources"
+                      title="Sources"
                     >
                       <ListVideo className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent
-                    className="w-72 p-0 mr-4 mb-4 bg-black/80 backdrop-blur-xl border border-white/10 shadow-2xl rounded-xl"
+                    className="w-80 p-0 mr-4 mb-4 bg-black/80 backdrop-blur-xl border border-white/10 shadow-2xl rounded-xl"
                     align="end"
                     side="top"
                   >
-                    <div className="p-3 border-b border-white/10 bg-white/5">
+                    <div className="p-3 border-b border-white/10 bg-white/5 flex items-center justify-between">
                       <h4 className="font-semibold text-sm text-white">Audio Sources</h4>
+                      {savedSourceId && (
+                        <button
+                          onClick={() => clearSourcePreference()}
+                          className="text-[10px] text-primary hover:text-primary/80 transition-colors"
+                        >
+                          Clear Saved
+                        </button>
+                      )}
                     </div>
+                    <p className="px-3 py-2 text-[10px] text-muted-foreground border-b border-white/5">
+                      Wrong song? Click <Star className="inline h-3 w-3 text-yellow-500" /> to save your preference
+                    </p>
                     <div className="max-h-60 overflow-y-auto p-1 custom-scrollbar">
                       {alternatives.length === 0 ? (
                         <div className="p-4 text-center text-xs text-muted-foreground">
                           No sources found
                         </div>
                       ) : (
-                        alternatives.map((item, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => changeSource(item)}
-                            className="w-full text-left p-2 hover:bg-white/10 rounded-lg flex items-center gap-3 transition-colors group"
-                          >
-                            <div className="h-9 w-9 rounded-md overflow-hidden bg-white/5 shrink-0">
-                              <img
-                                src={item.thumbnail || item.image?.[0]?.url}
-                                className="h-full w-full object-cover"
-                              />
+                        alternatives.map((item, idx) => {
+                          const itemId = item.id || item.url
+                          const isSaved = savedSourceId === itemId
+
+                          return (
+                            <div
+                              key={idx}
+                              className={`w-full p-2 rounded-lg flex items-center gap-3 transition-colors group ${
+                                isSaved ? 'bg-primary/20 border border-primary/30' : 'hover:bg-white/10'
+                              }`}
+                            >
+                              <button
+                                onClick={() => changeSource(item)}
+                                className="flex items-center gap-3 flex-1 text-left min-w-0"
+                              >
+                                <div className="h-9 w-9 rounded-md overflow-hidden bg-white/5 shrink-0 relative">
+                                  <img
+                                    src={item.thumbnail || item.image?.[0]?.url}
+                                    className="h-full w-full object-cover"
+                                  />
+                                  {isSaved && (
+                                    <div className="absolute inset-0 bg-primary/30 flex items-center justify-center">
+                                      <Check className="h-4 w-4 text-white" />
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p
+                                    className={`text-sm font-medium truncate ${
+                                      isSaved ? 'text-primary' : 'text-white/90 group-hover:text-primary'
+                                    }`}
+                                  >
+                                    {item.title || item.name}
+                                  </p>
+                                  <p className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
+                                    {item.channelTitle || item.artists?.[0]?.name}
+                                    {item.isJioSaavn && (
+                                      <span className="bg-green-500/20 text-green-400 px-1 rounded text-[8px] font-medium">
+                                        JioSaavn
+                                      </span>
+                                    )}
+                                    {item.isVideoSource && (
+                                      <span className="bg-red-500/20 text-red-400 px-1 rounded text-[8px] font-medium">
+                                        Video
+                                      </span>
+                                    )}
+                                    {isSaved && ' • Saved'}
+                                  </p>
+                                </div>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (isSaved) {
+                                    // Already saved - clicking clears the preference
+                                    clearSourcePreference()
+                                  } else {
+                                    // Not saved - save this as preferred
+                                    changeSource(item, true)
+                                  }
+                                }}
+                                className={`p-1.5 rounded-full transition-all shrink-0 ${
+                                  isSaved
+                                    ? 'text-yellow-500 bg-yellow-500/20'
+                                    : 'text-muted-foreground hover:text-yellow-500 hover:bg-yellow-500/10 opacity-0 group-hover:opacity-100'
+                                }`}
+                                title={isSaved ? 'Clear saved preference' : 'Set as preferred source'}
+                              >
+                                <Star className={`h-4 w-4 ${isSaved ? 'fill-current' : ''}`} />
+                              </button>
                             </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium truncate text-white/90 group-hover:text-primary">
-                                {item.title || item.name}
-                              </p>
-                              <p className="text-[10px] text-muted-foreground truncate">
-                                {item.channelTitle || item.artists?.[0]?.name}
-                              </p>
-                            </div>
-                          </button>
-                        ))
+                          )
+                        })
                       )}
                     </div>
                   </PopoverContent>
@@ -725,9 +803,19 @@ export function Player() {
                 >
                   <div className="border-b border-white/10 p-3 bg-white/5 flex justify-between items-center">
                     <h4 className="font-semibold text-sm text-white">Play Queue</h4>
-                    <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/70">
-                      {queue.length}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {queue.length > 0 && (
+                        <button
+                          onClick={() => clearQueue()}
+                          className="text-[10px] text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          Clear All
+                        </button>
+                      )}
+                      <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/70">
+                        {queue.length}
+                      </span>
+                    </div>
                   </div>
                   <div className="max-h-[50vh] overflow-y-auto w-full custom-scrollbar p-1">
                     {queue.length === 0 ? (
@@ -769,7 +857,6 @@ export function Player() {
                 </PopoverContent>
               </Popover>
 
-              {/* Download Button */}
               <Button
                 size="icon"
                 variant="ghost"
@@ -780,7 +867,6 @@ export function Player() {
                 <Download className="h-4 w-4" />
               </Button>
 
-              {/* Volume */}
               <div className="hidden sm:flex items-center gap-2 group/volume">
                 <Button
                   variant="ghost"

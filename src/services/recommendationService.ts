@@ -10,9 +10,11 @@ const sessionGeneratedIds = new Set<string>()
  */
 export const getAIRecommendations = async (
   seedTrack: SpotifyTrack,
-  userHistory: string[] = [] // Pass the last ~50 played song IDs here
+  userHistory: string[] = [] // Pass the played song IDs here
 ): Promise<SpotifyTrack[]> => {
   try {
+    if (!seedTrack) return []
+
     console.log(`[AI] Generating recommendations for: ${seedTrack.name}`)
 
     const artistName = seedTrack.artists?.[0]?.name || ''
@@ -23,12 +25,11 @@ export const getAIRecommendations = async (
     const queries = [
       `Songs similar to ${trackName} ${artistName}`,
       `Best songs by ${artistName}`,
-      `${artistName} radio mix`,
-      `${trackName} song radio`
+      `${artistName} mix`,
+      `${trackName} radio`
     ]
 
     // 2. PARALLEL EXECUTION (Faster)
-    // Run all searches at once. If one fails, others might succeed.
     const searchPromises = queries.map((q) =>
       smartSearch(q).catch((e) => {
         console.warn(`[AI] Search failed for query: "${q}"`, e)
@@ -45,8 +46,8 @@ export const getAIRecommendations = async (
     // Add seed track names to "seen" so we don't recommend the song currently playing
     seenNames.add(normalizeString(seedTrack.name))
 
-    // Also add user history to "seen" (names and IDs)
-    userHistory.forEach((id) => sessionGeneratedIds.add(id))
+    // Also add user history to "seen" to prevent repeats from previous sessions
+    // (Note: This relies on history being passed correctly)
 
     // Flatten results and filter
     for (const group of resultsArray) {
@@ -57,33 +58,28 @@ export const getAIRecommendations = async (
 
         // CHECK: Is this song valid?
         const isDuplicate = seenNames.has(normName)
-        const isPlayedRecently = sessionGeneratedIds.has(track.id)
+        const isPlayedRecently = userHistory.includes(track.id) || sessionGeneratedIds.has(track.id)
         const isTooShort = track.duration_ms < 60000 // Skip < 1 min snippets
 
         if (!isDuplicate && !isPlayedRecently && !isTooShort) {
           candidates.push(track)
           seenNames.add(normName)
-          // Don't add to session ID yet, only add if we actually pick it
         }
       }
     }
 
     // 4. SHUFFLE & SELECT
-    // Randomize the candidates so it's not always the same order
     const shuffled = candidates.sort(() => 0.5 - Math.random())
-
-    // Pick top 10
     const finalSelection = shuffled.slice(0, 10)
 
     // 5. FILLER LOGIC (If we have < 10 songs)
     if (finalSelection.length < 10) {
       console.log('[AI] Not enough songs found. Fetching generic fallback...')
       try {
-        // Fallback: Just get generic popular songs for the artist
         const fallbackRes = await smartSearch(`${artistName} top hits`)
         for (const track of fallbackRes) {
           if (finalSelection.length >= 10) break
-          if (!sessionGeneratedIds.has(track.id)) {
+          if (!sessionGeneratedIds.has(track.id) && !userHistory.includes(track.id)) {
             finalSelection.push(track)
           }
         }
@@ -103,7 +99,7 @@ export const getAIRecommendations = async (
   }
 }
 
-// Helper: Normalize string for fuzzy matching (removes punctuation, case)
+// Helper: Normalize string for fuzzy matching
 const normalizeString = (str: string) => {
   return str
     .toLowerCase()
@@ -111,9 +107,6 @@ const normalizeString = (str: string) => {
     .trim()
 }
 
-/**
- * Call this when the app starts or user clears queue to reset "session memory"
- */
 export const clearRecommendationSession = () => {
   sessionGeneratedIds.clear()
 }

@@ -5,38 +5,73 @@ const INSTANCES_URL = 'https://raw.githubusercontent.com/n-ce/Uma/main/dynamic_i
 const STORAGE_KEY_INSTANCE = 'ragam_selected_instance'
 const STORAGE_KEY_QUALITY = 'ragam_audio_quality'
 const STORAGE_KEY_PROVIDER = 'ragam_search_provider'
-const STORAGE_KEY_REGION = 'ragam_search_region' // NEW KEY
+const STORAGE_KEY_REGION = 'ragam_search_region'
+const STORAGE_KEY_NORMALIZATION = 'ragam_audio_normalization'
 
-export const DEFAULT_INSTANCE = 'https://api.piped.private.coffee'
+// Default JioSaavn API instance
+export const DEFAULT_INSTANCE = 'https://saavn-ytify.vercel.app'
 export const DEFAULT_QUALITY = 'high'
-export const DEFAULT_PROVIDER = 'youtube'
-export const DEFAULT_REGION = 'IN' // Default to India (or US)
+export const DEFAULT_PROVIDER = 'youtube' // Changed back to YouTube
+export const DEFAULT_REGION = 'IN'
+export const DEFAULT_NORMALIZATION = false
 
-// ... existing providers ...
+// Provider Getters/Setters
 export const getSearchProvider = () =>
   localStorage.getItem(STORAGE_KEY_PROVIDER) || DEFAULT_PROVIDER
 export const setSearchProvider = (provider: string) =>
   localStorage.setItem(STORAGE_KEY_PROVIDER, provider)
 
-// ... existing instances ...
+// Instance Getters/Setters (for JioSaavn API)
 export const getSavedInstance = () => localStorage.getItem(STORAGE_KEY_INSTANCE) || DEFAULT_INSTANCE
 export const setSavedInstance = (url: string) => localStorage.setItem(STORAGE_KEY_INSTANCE, url)
 
-// ... existing quality ...
+// Audio Quality Getters/Setters
 export const getAudioQuality = () => localStorage.getItem(STORAGE_KEY_QUALITY) || DEFAULT_QUALITY
 export const setAudioQuality = (q: string) => localStorage.setItem(STORAGE_KEY_QUALITY, q)
 
-// NEW: Region Getters/Setters
+// Region Getters/Setters
 export const getSearchRegion = () => localStorage.getItem(STORAGE_KEY_REGION) || DEFAULT_REGION
 export const setSearchRegion = (region: string) => localStorage.setItem(STORAGE_KEY_REGION, region)
 
-export const fetchInstances = async () => {
+// Audio Normalization Getters/Setters
+export const getAudioNormalization = (): boolean => {
+  const stored = localStorage.getItem(STORAGE_KEY_NORMALIZATION)
+  return stored === 'true'
+}
+export const setAudioNormalization = (enabled: boolean) =>
+  localStorage.setItem(STORAGE_KEY_NORMALIZATION, String(enabled))
+
+// Fetch dynamic instances from remote config
+export const fetchInstances = async (): Promise<{
+  jiosaavn: string
+  invidious: string[]
+  hyperpipe: string[]
+}> => {
   try {
     const response = await fetch(INSTANCES_URL)
     const data = await response.json()
-    return data.piped || []
+    return {
+      jiosaavn: data.jiosaavn || DEFAULT_INSTANCE,
+      invidious: data.invidious || [],
+      hyperpipe: data.hyperpipe || []
+    }
   } catch {
-    return []
+    return {
+      jiosaavn: DEFAULT_INSTANCE,
+      invidious: [],
+      hyperpipe: []
+    }
+  }
+}
+
+// Get just the JioSaavn instance URL
+export const fetchJioSaavnInstance = async (): Promise<string> => {
+  try {
+    const response = await fetch(INSTANCES_URL)
+    const data = await response.json()
+    return data.jiosaavn || DEFAULT_INSTANCE
+  } catch {
+    return DEFAULT_INSTANCE
   }
 }
 

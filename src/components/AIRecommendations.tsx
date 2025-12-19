@@ -9,17 +9,54 @@ import { usePlayer } from '@/context/PlayerContext'
 import { searchTracks } from '@/services/spotifyservice'
 import { SpotifyTrack } from '@/types/spotify' // Import Type
 
+const STORAGE_KEY = 'ai_recommendations'
+
 export function AIRecommendations() {
   const { user, spotifyToken } = useSpotifyAuth()
   const { addManyToQueue } = usePlayer()
-  // Fix: Explicitly type the state
-  const [recommendations, setRecommendations] = useState<SpotifyTrack[]>([])
+  
+  // Load recommendations from localStorage on mount
+  const [recommendations, setRecommendations] = useState<SpotifyTrack[]>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        // Check if data is from today (within 24 hours)
+        if (parsed.timestamp && Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000) {
+          return parsed.tracks || []
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load saved recommendations')
+    }
+    return []
+  })
+  
   const [loading, setLoading] = useState(false)
-  const [hasGeneratedToday, setHasGeneratedToday] = useState(false)
+  const [hasGeneratedToday, setHasGeneratedToday] = useState(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        return parsed.timestamp && Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000
+      }
+    } catch (e) {}
+    return false
+  })
 
+  // Save recommendations to localStorage whenever they change
   useEffect(() => {
-    // Optional: Load saved recommendations
-  }, [user])
+    if (recommendations.length > 0) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          tracks: recommendations,
+          timestamp: Date.now()
+        }))
+      } catch (e) {
+        console.warn('Failed to save recommendations')
+      }
+    }
+  }, [recommendations])
 
   const fetchRecommendations = async () => {
     if (!user?.id || !spotifyToken) return

@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { searchTracks } from "@/services/spotifyservice";
+import { searchTracks, searchAlbums } from "@/services/spotifyservice";
 import { useSpotifyAuth } from "@/context/SpotifyAuthContext";
 import { toast } from "sonner";
 
 export const useSpotifySearch = () => {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [albumResults, setAlbumResults] = useState<any[]>([]);
   const { spotifyToken } = useSpotifyAuth();
 
   const search = async (query: string) => {
@@ -16,14 +17,23 @@ export const useSpotifySearch = () => {
 
     if (!query.trim()) {
       setSearchResults([]);
+      setAlbumResults([]);
       return [];
     }
 
     setSearching(true);
     try {
-      const data = await searchTracks(spotifyToken, query);
-      const tracks = data.tracks?.items || [];
+      // Search for both tracks and albums in parallel
+      const [trackData, albumData] = await Promise.all([
+        searchTracks(spotifyToken, query),
+        searchAlbums(spotifyToken, query)
+      ]);
+      
+      const tracks = trackData.tracks?.items || [];
+      const albums = albumData.albums?.items || [];
+      
       setSearchResults(tracks);
+      setAlbumResults(albums);
       return tracks;
     } catch (error) {
       console.error("Search error:", error);
@@ -34,5 +44,5 @@ export const useSpotifySearch = () => {
     }
   };
 
-  return { search, searching, searchResults };
+  return { search, searching, searchResults, albumResults };
 };

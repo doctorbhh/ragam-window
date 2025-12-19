@@ -3,21 +3,6 @@ import { SpotifyTrack } from '@/types/spotify'
 
 const JIOSAAVN_API_URL = 'https://jiosavan-ytify.vercel.app/api/search/songs'
 
-declare global {
-  interface Window {
-    electron: {
-      youtube: {
-        // UPDATE TYPES
-        search: (query: string, region?: string) => Promise<any[]>
-        getStream: (
-          videoId: string,
-          quality?: string
-        ) => Promise<{ url: string; duration: number } | null>
-      }
-    }
-  }
-}
-
 export const getAudioUrlForTrack = async (track: SpotifyTrack): Promise<string> => {
   const provider = getSearchProvider()
 
@@ -78,6 +63,18 @@ export const searchYouTube = async (query: string) => {
     return await window.electron.youtube.search(query, region)
   } catch (error) {
     console.error('YouTube search failed:', error)
+    return []
+  }
+}
+
+// Search regular YouTube videos (for alternative audio sources)
+export const searchYouTubeVideo = async (query: string) => {
+  try {
+    const results = await window.electron.youtube.searchVideo(query)
+    // Mark these as video sources
+    return results.map((r: any) => ({ ...r, isVideoSource: true }))
+  } catch (error) {
+    console.error('YouTube video search failed:', error)
     return []
   }
 }
@@ -224,6 +221,23 @@ const searchJioSaavn = async (query: string) => {
     })
   } catch (e) {
     console.error('JioSaavn search error:', e)
+    return []
+  }
+}
+
+// Export function to search JioSaavn for audio source alternatives
+export const searchJioSaavnResults = async (query: string) => {
+  try {
+    const results = await searchJioSaavn(query)
+    // Mark results as JioSaavn source and add thumbnail
+    return results.map((r: any) => ({
+      ...r,
+      isJioSaavn: true,
+      thumbnail: r.album?.images?.[0]?.url,
+      channelTitle: r.artists?.[0]?.name || 'JioSaavn'
+    }))
+  } catch (error) {
+    console.error('JioSaavn results search failed:', error)
     return []
   }
 }

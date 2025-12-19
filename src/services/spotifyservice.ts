@@ -100,4 +100,33 @@ export const searchTracks = async (
   );
 };
 
+// Search for albums
+export const searchAlbums = async (
+  token: string,
+  query: string,
+  offset = 0,
+  limit = 10
+) => {
+  return spotifyFetch(
+    `/search?q=${encodeURIComponent(query)}&type=album&offset=${offset}&limit=${limit}`,
+    token
+  );
+};
+
+// Get tracks in an album
+export const getAlbumTracks = async (
+  token: string,
+  albumId: string
+) => {
+  return spotifyFetch(`/albums/${albumId}/tracks?limit=50`, token);
+};
+
+// Get album details with tracks
+export const getAlbum = async (
+  token: string,
+  albumId: string
+) => {
+  return spotifyFetch(`/albums/${albumId}`, token);
+};
+
 export { spotifyFetch };

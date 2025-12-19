@@ -18,5 +18,22 @@ electron.contextBridge.exposeInMainWorld("electron", {
       electron.ipcRenderer.removeAllListeners("download-progress");
       electron.ipcRenderer.removeAllListeners("download-complete");
     }
+  },
+  cache: {
+    get: (key) => electron.ipcRenderer.invoke("cache-get", key),
+    put: (key, data, metadata) => electron.ipcRenderer.invoke("cache-put", key, data, metadata),
+    delete: (key) => electron.ipcRenderer.invoke("cache-delete", key),
+    clear: () => electron.ipcRenderer.invoke("cache-clear"),
+    getStats: () => electron.ipcRenderer.invoke("cache-stats"),
+    getSettings: () => electron.ipcRenderer.invoke("cache-settings-get"),
+    setSettings: (settings) => electron.ipcRenderer.invoke("cache-settings-set", settings),
+    list: () => electron.ipcRenderer.invoke("cache-list")
+  },
+  songPref: {
+    get: (trackKey) => electron.ipcRenderer.invoke("song-pref-get", trackKey),
+    set: (trackKey, preference) => electron.ipcRenderer.invoke("song-pref-set", trackKey, preference),
+    delete: (trackKey) => electron.ipcRenderer.invoke("song-pref-delete", trackKey),
+    list: () => electron.ipcRenderer.invoke("song-pref-list"),
+    clear: () => electron.ipcRenderer.invoke("song-pref-clear")
   }
 });

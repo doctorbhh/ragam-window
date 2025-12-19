@@ -4,6 +4,280 @@ const path = require("node:path");
 const fs = require("node:fs");
 const child_process = require("child_process");
 electron.app.commandLine.appendSwitch("ignore-certificate-errors");
+const CACHE_DIR = path.join(electron.app.getPath("userData"), "audio-cache");
+const CACHE_SETTINGS_FILE = path.join(electron.app.getPath("userData"), "cache-settings.json");
+const DEFAULT_CACHE_SETTINGS = {
+  enabled: true,
+  maxSizeMB: 500
+};
+const ensureCacheDir = () => {
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+};
+const getCacheSettings = () => {
+  try {
+    if (fs.existsSync(CACHE_SETTINGS_FILE)) {
+      const data = fs.readFileSync(CACHE_SETTINGS_FILE, "utf-8");
+      return { ...DEFAULT_CACHE_SETTINGS, ...JSON.parse(data) };
+    }
+  } catch (e) {
+    console.error("Error reading cache settings:", e);
+  }
+  return DEFAULT_CACHE_SETTINGS;
+};
+const saveCacheSettings = (settings) => {
+  try {
+    fs.writeFileSync(CACHE_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  } catch (e) {
+    console.error("Error saving cache settings:", e);
+  }
+};
+const getCacheEntries = () => {
+  ensureCacheDir();
+  const entries = [];
+  try {
+    const files = fs.readdirSync(CACHE_DIR);
+    const metaFiles = files.filter((f) => f.endsWith(".meta.json"));
+    for (const metaFile of metaFiles) {
+      const key = metaFile.replace(".meta.json", "");
+      const audioPath = path.join(CACHE_DIR, `${key}.audio`);
+      const metaPath = path.join(CACHE_DIR, metaFile);
+      if (fs.existsSync(audioPath)) {
+        try {
+          const metadata = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+          entries.push({ key, metadata, audioPath });
+        } catch (e) {
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Error reading cache entries:", e);
+  }
+  return entries;
+};
+const getCacheSizeBytes = () => {
+  const entries = getCacheEntries();
+  return entries.reduce((total, entry) => total + (entry.metadata.size || 0), 0);
+};
+const evictIfNeeded = (maxSizeBytes, reserveBytes = 0) => {
+  const currentSize = getCacheSizeBytes();
+  const targetSize = maxSizeBytes - reserveBytes;
+  if (currentSize <= targetSize) return;
+  const entries = getCacheEntries();
+  entries.sort((a, b) => a.metadata.cachedAt - b.metadata.cachedAt);
+  let freedBytes = 0;
+  const bytesToFree = currentSize - targetSize;
+  for (const entry of entries) {
+    if (freedBytes >= bytesToFree) break;
+    try {
+      fs.unlinkSync(entry.audioPath);
+      fs.unlinkSync(path.join(CACHE_DIR, `${entry.key}.meta.json`));
+      freedBytes += entry.metadata.size;
+      console.log(`[Cache] Evicted: ${entry.key} (${entry.metadata.size} bytes)`);
+    } catch (e) {
+      console.error(`Error evicting ${entry.key}:`, e);
+    }
+  }
+};
+electron.ipcMain.handle("cache-get", async (_, key) => {
+  try {
+    const settings = getCacheSettings();
+    if (!settings.enabled) return null;
+    const audioPath = path.join(CACHE_DIR, `${key}.audio`);
+    if (fs.existsSync(audioPath)) {
+      const data = fs.readFileSync(audioPath);
+      console.log(`[Cache] HIT: ${key}`);
+      return data.buffer;
+    }
+    console.log(`[Cache] MISS: ${key}`);
+    return null;
+  } catch (e) {
+    console.error("Cache get error:", e);
+    return null;
+  }
+});
+electron.ipcMain.handle("cache-put", async (_, key, data, metadata) => {
+  try {
+    const settings = getCacheSettings();
+    if (!settings.enabled) return false;
+    ensureCacheDir();
+    const maxSizeBytes = settings.maxSizeMB * 1024 * 1024;
+    const dataSize = data.byteLength;
+    if (dataSize > maxSizeBytes) {
+      console.log(`[Cache] File too large to cache: ${dataSize} bytes`);
+      return false;
+    }
+    evictIfNeeded(maxSizeBytes, dataSize);
+    const audioPath = path.join(CACHE_DIR, `${key}.audio`);
+    const metaPath = path.join(CACHE_DIR, `${key}.meta.json`);
+    const fullMetadata = {
+      trackId: "",
+      searchQuery: "",
+      ...metadata,
+      cachedAt: Date.now(),
+      size: dataSize
+    };
+    fs.writeFileSync(audioPath, Buffer.from(data));
+    fs.writeFileSync(metaPath, JSON.stringify(fullMetadata, null, 2));
+    console.log(`[Cache] STORED: ${key} (${dataSize} bytes)`);
+    return true;
+  } catch (e) {
+    console.error("Cache put error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-delete", async (_, key) => {
+  try {
+    const audioPath = path.join(CACHE_DIR, `${key}.audio`);
+    const metaPath = path.join(CACHE_DIR, `${key}.meta.json`);
+    if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+    console.log(`[Cache] DELETED: ${key}`);
+    return true;
+  } catch (e) {
+    console.error("Cache delete error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-clear", async () => {
+  try {
+    ensureCacheDir();
+    const files = fs.readdirSync(CACHE_DIR);
+    for (const file of files) {
+      fs.unlinkSync(path.join(CACHE_DIR, file));
+    }
+    console.log("[Cache] CLEARED all entries");
+    return true;
+  } catch (e) {
+    console.error("Cache clear error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-stats", async () => {
+  try {
+    const entries = getCacheEntries();
+    const totalSize = entries.reduce((sum, e) => sum + e.metadata.size, 0);
+    return {
+      count: entries.length,
+      sizeBytes: totalSize,
+      sizeMB: Math.round(totalSize / (1024 * 1024) * 100) / 100
+    };
+  } catch (e) {
+    console.error("Cache stats error:", e);
+    return { count: 0, sizeBytes: 0, sizeMB: 0 };
+  }
+});
+electron.ipcMain.handle("cache-settings-get", async () => {
+  return getCacheSettings();
+});
+electron.ipcMain.handle("cache-settings-set", async (_, settings) => {
+  try {
+    const current = getCacheSettings();
+    const updated = { ...current, ...settings };
+    saveCacheSettings(updated);
+    if (updated.enabled && settings.maxSizeMB) {
+      evictIfNeeded(updated.maxSizeMB * 1024 * 1024);
+    }
+    return true;
+  } catch (e) {
+    console.error("Cache settings save error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-list", async () => {
+  try {
+    const entries = getCacheEntries();
+    return entries.map((entry) => ({
+      key: entry.key,
+      trackId: entry.metadata.trackId,
+      searchQuery: entry.metadata.searchQuery,
+      cachedAt: entry.metadata.cachedAt,
+      sizeMB: Math.round(entry.metadata.size / (1024 * 1024) * 100) / 100
+    }));
+  } catch (e) {
+    console.error("Cache list error:", e);
+    return [];
+  }
+});
+const SONG_PREFS_FILE = path.join(electron.app.getPath("userData"), "song-preferences.json");
+const loadSongPreferences = () => {
+  try {
+    if (fs.existsSync(SONG_PREFS_FILE)) {
+      const data = fs.readFileSync(SONG_PREFS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading song preferences:", e);
+  }
+  return {};
+};
+const saveSongPreferences = (prefs) => {
+  try {
+    fs.writeFileSync(SONG_PREFS_FILE, JSON.stringify(prefs, null, 2));
+  } catch (e) {
+    console.error("Error saving song preferences:", e);
+  }
+};
+electron.ipcMain.handle("song-pref-get", async (_, trackKey) => {
+  try {
+    const prefs = loadSongPreferences();
+    return prefs[trackKey] || null;
+  } catch (e) {
+    console.error("Song pref get error:", e);
+    return null;
+  }
+});
+electron.ipcMain.handle(
+  "song-pref-set",
+  async (_, trackKey, preference) => {
+    try {
+      const prefs = loadSongPreferences();
+      prefs[trackKey] = {
+        ...preference,
+        savedAt: Date.now()
+      };
+      saveSongPreferences(prefs);
+      console.log(`[SongPref] Saved preference for: ${trackKey}`);
+      return true;
+    } catch (e) {
+      console.error("Song pref set error:", e);
+      return false;
+    }
+  }
+);
+electron.ipcMain.handle("song-pref-delete", async (_, trackKey) => {
+  try {
+    const prefs = loadSongPreferences();
+    if (prefs[trackKey]) {
+      delete prefs[trackKey];
+      saveSongPreferences(prefs);
+      console.log(`[SongPref] Deleted preference for: ${trackKey}`);
+    }
+    return true;
+  } catch (e) {
+    console.error("Song pref delete error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("song-pref-list", async () => {
+  try {
+    return loadSongPreferences();
+  } catch (e) {
+    console.error("Song pref list error:", e);
+    return {};
+  }
+});
+electron.ipcMain.handle("song-pref-clear", async () => {
+  try {
+    saveSongPreferences({});
+    console.log("[SongPref] Cleared all preferences");
+    return true;
+  } catch (e) {
+    console.error("Song pref clear error:", e);
+    return false;
+  }
+});
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(__dirname, "../public");
 let win;
@@ -143,7 +417,7 @@ electron.ipcMain.handle("youtube-search", async (_, query, region = "US") => {
       searchUrl,
       "--dump-single-json",
       "--playlist-items",
-      "1,2,3,4,5",
+      "1,2,3,4,5,6,7,8,9,10",
       "--flat-playlist",
       "--no-warnings",
       "--no-check-certificate",

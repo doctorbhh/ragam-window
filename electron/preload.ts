@@ -25,5 +25,26 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.removeAllListeners('download-progress')
       ipcRenderer.removeAllListeners('download-complete')
     }
+  },
+
+  cache: {
+    get: (key: string) => ipcRenderer.invoke('cache-get', key),
+    put: (key: string, data: ArrayBuffer, metadata: object) =>
+      ipcRenderer.invoke('cache-put', key, data, metadata),
+    delete: (key: string) => ipcRenderer.invoke('cache-delete', key),
+    clear: () => ipcRenderer.invoke('cache-clear'),
+    getStats: () => ipcRenderer.invoke('cache-stats'),
+    getSettings: () => ipcRenderer.invoke('cache-settings-get'),
+    setSettings: (settings: object) => ipcRenderer.invoke('cache-settings-set', settings),
+    list: () => ipcRenderer.invoke('cache-list')
+  },
+
+  songPref: {
+    get: (trackKey: string) => ipcRenderer.invoke('song-pref-get', trackKey),
+    set: (trackKey: string, preference: object) =>
+      ipcRenderer.invoke('song-pref-set', trackKey, preference),
+    delete: (trackKey: string) => ipcRenderer.invoke('song-pref-delete', trackKey),
+    list: () => ipcRenderer.invoke('song-pref-list'),
+    clear: () => ipcRenderer.invoke('song-pref-clear')
   }
 })

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
-  Server,
   Trash2,
-  RefreshCw,
   Signal,
   AlertTriangle,
   Globe,
-  MapPin // FIX: Added missing import
+  MapPin,
+  HardDrive,
+  Volume2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,25 +28,29 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import { toast } from 'sonner'
 import {
-  fetchInstances,
-  getSavedInstance,
-  setSavedInstance,
   clearAllData,
-  DEFAULT_INSTANCE,
   getAudioQuality,
   setAudioQuality,
   getSearchProvider,
   setSearchProvider,
   getSearchRegion,
-  setSearchRegion
+  setSearchRegion,
+  getAudioNormalization,
+  setAudioNormalization
 } from '@/services/instanceService'
-
-interface Instance {
-  name: string
-  api_url: string
-}
+import {
+  getCacheSettings,
+  setCacheSettings,
+  getCacheStats,
+  clearCache,
+  CacheSettings,
+  CacheStats
+} from '@/services/cacheService'
 
 const REGIONS = [
   { code: 'US', name: 'United States' },
@@ -61,43 +65,24 @@ const REGIONS = [
 ]
 
 const Settings = () => {
-  const [instances, setInstances] = useState<Instance[]>([])
-  const [currentInstance, setCurrentInstance] = useState(DEFAULT_INSTANCE)
   const [currentQuality, setCurrentQuality] = useState('high')
   const [currentProvider, setCurrentProvider] = useState('youtube')
   const [currentRegion, setCurrentRegion] = useState('IN')
-  const [loading, setLoading] = useState(false)
+  const [normalizationEnabled, setNormalizationEnabled] = useState(false)
+
+  // Cache state
+  const [cacheEnabled, setCacheEnabled] = useState(true)
+  const [cacheMaxSize, setCacheMaxSize] = useState(500)
+  const [cacheStats, setCacheStats] = useState<CacheStats>({ count: 0, sizeBytes: 0, sizeMB: 0 })
+  const [cacheLoading, setCacheLoading] = useState(false)
 
   useEffect(() => {
-    loadInstances()
-    setCurrentInstance(getSavedInstance())
     setCurrentQuality(getAudioQuality())
     setCurrentProvider(getSearchProvider())
     setCurrentRegion(getSearchRegion())
+    setNormalizationEnabled(getAudioNormalization())
+    loadCacheSettings()
   }, [])
-
-  const loadInstances = async () => {
-    setLoading(true)
-    try {
-      const list = await fetchInstances()
-      if (list.length > 0) {
-        setInstances(list)
-        toast.success(`Loaded ${list.length} instances`)
-      } else {
-        toast.error('Could not load instances list')
-      }
-    } catch (e) {
-      toast.error('Failed to fetch instances')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleInstanceChange = (value: string) => {
-    setSavedInstance(value)
-    setCurrentInstance(value)
-    toast.success('Search API updated')
-  }
 
   const handleQualityChange = (value: string) => {
     setAudioQuality(value)
@@ -117,8 +102,56 @@ const Settings = () => {
     toast.success(`Search region set to ${value}`)
   }
 
+  const handleNormalizationChange = (enabled: boolean) => {
+    setAudioNormalization(enabled)
+    setNormalizationEnabled(enabled)
+    toast.success(`Audio normalization ${enabled ? 'enabled' : 'disabled'}`)
+  }
+
   const handleClearData = () => {
     clearAllData()
+  }
+
+  // Cache handlers
+  const loadCacheSettings = async () => {
+    try {
+      const settings = await getCacheSettings()
+      setCacheEnabled(settings.enabled)
+      setCacheMaxSize(settings.maxSizeMB)
+      const stats = await getCacheStats()
+      setCacheStats(stats)
+    } catch (e) {
+      console.error('Failed to load cache settings:', e)
+    }
+  }
+
+  const handleCacheToggle = async (enabled: boolean) => {
+    setCacheEnabled(enabled)
+    await setCacheSettings({ enabled })
+    toast.success(enabled ? 'Audio caching enabled' : 'Audio caching disabled')
+  }
+
+  const handleCacheSizeChange = async (value: string) => {
+    const maxSizeMB = parseInt(value)
+    setCacheMaxSize(maxSizeMB)
+    await setCacheSettings({ maxSizeMB })
+    // Refresh stats after potential eviction
+    const stats = await getCacheStats()
+    setCacheStats(stats)
+    toast.success(`Cache size limit set to ${maxSizeMB} MB`)
+  }
+
+  const handleClearCache = async () => {
+    setCacheLoading(true)
+    try {
+      await clearCache()
+      setCacheStats({ count: 0, sizeBytes: 0, sizeMB: 0 })
+      toast.success('Audio cache cleared')
+    } catch (e) {
+      toast.error('Failed to clear cache')
+    } finally {
+      setCacheLoading(false)
+    }
   }
 
   return (
@@ -196,47 +229,124 @@ const Settings = () => {
           </CardContent>
         </Card>
 
-        {/* API Instance Settings (Only show if YouTube) */}
-        {currentProvider === 'youtube' && (
-          <Card className="border-border/50 bg-card/50 backdrop-blur">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Server className="h-5 w-5 text-primary" />
-                <CardTitle>Piped Instance</CardTitle>
+        {/* Audio Normalization */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Volume2 className="h-5 w-5 text-primary" />
+              <CardTitle>Audio Normalization</CardTitle>
+            </div>
+            <CardDescription>
+              Automatically adjust volume levels so all songs play at similar loudness.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="normalization">Enable normalization</Label>
+                <p className="text-xs text-muted-foreground">
+                  Prevents sudden volume jumps between tracks
+                </p>
               </div>
-              <CardDescription>Select the Piped server used for YouTube searches.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4">
-                <Select value={currentInstance} onValueChange={handleInstanceChange}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select an instance" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_INSTANCE}>
-                      Default ({new URL(DEFAULT_INSTANCE).hostname})
-                    </SelectItem>
-                    {instances.map((inst, idx) => (
-                      <SelectItem key={idx} value={inst.api_url}>
-                        {inst.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <Switch
+                id="normalization"
+                checked={normalizationEnabled}
+                onCheckedChange={handleNormalizationChange}
+              />
+            </div>
+          </CardContent>
+        </Card>
 
+        {/* Audio Cache Settings */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5 text-primary" />
+              <CardTitle>Audio Cache</CardTitle>
+            </div>
+            <CardDescription>Cache songs locally for faster playback on repeat plays.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Enable Toggle */}
+            <div className="flex items-center justify-between">
+              <Label htmlFor="cache-toggle" className="flex flex-col gap-1">
+                <span>Enable Cache</span>
+                <span className="text-xs text-muted-foreground font-normal">
+                  Store audio locally for faster playback
+                </span>
+              </Label>
+              <Switch
+                id="cache-toggle"
+                checked={cacheEnabled}
+                onCheckedChange={handleCacheToggle}
+              />
+            </div>
+
+            {/* Max Size Selector */}
+            <div className="space-y-2">
+              <Label>Maximum Cache Size</Label>
+              <Select
+                value={cacheMaxSize.toString()}
+                onValueChange={handleCacheSizeChange}
+                disabled={!cacheEnabled}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select size" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="100">100 MB</SelectItem>
+                  <SelectItem value="250">250 MB</SelectItem>
+                  <SelectItem value="500">500 MB</SelectItem>
+                  <SelectItem value="1024">1 GB</SelectItem>
+                  <SelectItem value="2048">2 GB</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Usage Display */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Current Usage</span>
+                <span className="font-medium">
+                  {cacheStats.sizeMB} MB / {cacheMaxSize} MB ({cacheStats.count} songs)
+                </span>
+              </div>
+              <Progress
+                value={(cacheStats.sizeMB / cacheMaxSize) * 100}
+                className="h-2"
+              />
+            </div>
+
+            {/* Clear Cache Button */}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
                 <Button
                   variant="outline"
-                  size="icon"
-                  onClick={loadInstances}
-                  disabled={loading}
-                  title="Refresh List"
+                  className="w-full"
+                  disabled={cacheStats.count === 0 || cacheLoading}
                 >
-                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {cacheLoading ? 'Clearing...' : 'Clear Cache'}
                 </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear Audio Cache?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will delete {cacheStats.count} cached songs ({cacheStats.sizeMB} MB).
+                    Songs will be re-downloaded when played again.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleClearCache}>
+                    Clear Cache
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </CardContent>
+        </Card>
 
         {/* Danger Zone */}
         <Card className="border-destructive/20 bg-destructive/5">
