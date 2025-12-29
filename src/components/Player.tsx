@@ -368,6 +368,66 @@ export function Player() {
   const [currentLyricIndex, setCurrentLyricIndex] = useState(-1)
   const [loadingLyrics, setLoadingLyrics] = useState(false)
   const activeLyricRef = useRef<HTMLParagraphElement>(null)
+  const lyricsContainerRef = useRef<HTMLDivElement>(null)
+  
+  // Album colors for gradient and text
+  const [albumColor, setAlbumColor] = useState('rgb(20, 20, 20)')
+  const [lyricAccentColor, setLyricAccentColor] = useState('rgb(255, 255, 255)')
+  
+  // Extract dominant color from album art
+  useEffect(() => {
+    if (!currentTrack?.album?.images?.[0]?.url) {
+      setAlbumColor('rgb(20, 20, 20)')
+      setLyricAccentColor('rgb(255, 255, 255)')
+      return
+    }
+    
+    const img = new Image()
+    img.crossOrigin = 'Anonymous'
+    img.src = currentTrack.album.images[0].url
+    
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      
+      canvas.width = 50 // Small size for performance
+      canvas.height = 50
+      ctx.drawImage(img, 0, 0, 50, 50)
+      
+      try {
+        const imageData = ctx.getImageData(0, 0, 50, 50).data
+        let r = 0, g = 0, b = 0, count = 0
+        
+        // Sample pixels (skip some for performance)
+        for (let i = 0; i < imageData.length; i += 16) {
+          r += imageData[i]
+          g += imageData[i + 1]
+          b += imageData[i + 2]
+          count++
+        }
+        
+        r = Math.floor(r / count)
+        g = Math.floor(g / count)
+        b = Math.floor(b / count)
+        
+        // Bright version for active lyric text (boost saturation and brightness)
+        const brightR = Math.min(255, Math.floor(r * 1.5 + 80))
+        const brightG = Math.min(255, Math.floor(g * 1.5 + 80))
+        const brightB = Math.min(255, Math.floor(b * 1.5 + 80))
+        setLyricAccentColor(`rgb(${brightR}, ${brightG}, ${brightB})`)
+        
+        // Darken the color for better text readability
+        r = Math.floor(r * 0.4)
+        g = Math.floor(g * 0.4)
+        b = Math.floor(b * 0.4)
+        
+        setAlbumColor(`rgb(${r}, ${g}, ${b})`)
+      } catch (e) {
+        setAlbumColor('rgb(20, 20, 20)')
+      }
+    }
+  }, [currentTrack?.album?.images])
 
   useEffect(() => {
     setSyncedLyrics([])
@@ -393,8 +453,17 @@ export function Player() {
   }, [progress, syncedLyrics, currentLyricIndex])
 
   useEffect(() => {
-    if (activeLyricRef.current)
-      activeLyricRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (activeLyricRef.current && lyricsContainerRef.current) {
+      const container = lyricsContainerRef.current
+      const activeElement = activeLyricRef.current
+      const containerHeight = container.clientHeight
+      const elementTop = activeElement.offsetTop
+      const elementHeight = activeElement.clientHeight
+      
+      // Scroll to center the active lyric in the container
+      const scrollTo = elementTop - (containerHeight / 2) + (elementHeight / 2)
+      container.scrollTo({ top: scrollTo, behavior: 'smooth' })
+    }
   }, [currentLyricIndex])
 
   const handleProgressChange = (value: number[]) => {
@@ -751,35 +820,95 @@ export function Player() {
                     <Mic2 className="h-4 w-4" />
                   </Button>
                 </SheetTrigger>
-                <SheetContent className="overflow-hidden flex flex-col w-full sm:max-w-md bg-black/80 backdrop-blur-2xl border-l border-white/10">
-                  <SheetHeader>
-                    <SheetTitle className="text-center text-xl font-bold text-white tracking-tight">
-                      Lyrics
-                    </SheetTitle>
-                  </SheetHeader>
-                  <div className="flex-1 overflow-y-auto px-6 mt-8 pb-20 scrollbar-hide mask-image-gradient">
-                    {loadingLyrics ? (
-                      <div className="flex h-full flex-col items-center justify-center gap-4">
-                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                        <p className="text-muted-foreground">Fetching...</p>
+                <SheetContent 
+                  side="bottom" 
+                  className="h-[100vh] w-full border-t border-white/10 p-0 lyrics-animated-bg"
+                  style={{ background: `linear-gradient(135deg, ${albumColor} 0%, rgb(15, 15, 15) 40%, ${albumColor} 100%)` }}
+                >
+                  <SheetTitle className="sr-only">Song Lyrics</SheetTitle>
+                  <div className="h-full flex flex-col md:flex-row">
+                    {/* Left Side - Album Art & Track Info */}
+                    <div className="w-full md:w-2/5 flex flex-col items-center justify-center p-8 md:p-12">
+                      <div className="relative group">
+                        <div className="w-48 h-48 md:w-64 md:h-64 rounded-lg shadow-2xl overflow-hidden">
+                          {currentTrack?.album?.images?.[0]?.url ? (
+                            <img
+                              src={currentTrack.album.images[0].url}
+                              alt={currentTrack.name}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center">
+                              <Mic2 className="h-16 w-16 text-white/50" />
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    ) : syncedLyrics.length > 0 ? (
-                      <div className="flex flex-col gap-8 py-10">
-                        {syncedLyrics.map((line, i) => (
-                          <p
-                            key={i}
-                            className={`text-center transition-all duration-500 cursor-pointer ${i === currentLyricIndex ? 'text-2xl font-bold text-primary scale-110 drop-shadow-md' : 'text-lg text-muted-foreground/40 hover:text-muted-foreground/80'}`}
-                            onClick={() => seekTo(line.time)}
-                          >
-                            {line.text}
-                          </p>
-                        ))}
+                      <div className="mt-6 text-center max-w-[280px]">
+                        <h2 className="text-lg md:text-xl font-bold text-white truncate">
+                          {currentTrack?.name || 'No track'}
+                        </h2>
+                        <p className="text-sm text-white/60 mt-1 truncate">
+                          {currentTrack?.artists?.map((a: any) => a.name).join(', ')}
+                        </p>
                       </div>
-                    ) : (
-                      <div className="whitespace-pre-wrap text-center text-lg leading-loose font-medium text-white/70 py-10">
-                        {plainLyrics || 'No lyrics available.'}
+                    </div>
+
+                    {/* Right Side - Lyrics */}
+                    <div className="flex-1 flex flex-col overflow-hidden md:border-l border-white/5">
+                      <div 
+                        ref={lyricsContainerRef}
+                        className="flex-1 overflow-y-auto px-6 md:px-12 py-8 scrollbar-hide" 
+                        style={{ maskImage: 'linear-gradient(transparent, black 15%, black 85%, transparent)' }}
+                      >
+                        {loadingLyrics ? (
+                          <div className="flex h-full flex-col items-center justify-center gap-4">
+                            <Loader2 className="h-8 w-8 animate-spin text-white/50" />
+                            <p className="text-white/40">Loading lyrics...</p>
+                          </div>
+                        ) : syncedLyrics.length > 0 ? (
+                          <div className="flex flex-col gap-8 py-32">
+                            {syncedLyrics.map((line, i) => {
+                              const isActive = i === currentLyricIndex
+                              const isPast = i < currentLyricIndex
+                              const distance = Math.abs(i - currentLyricIndex)
+                              
+                              return (
+                                <p
+                                  key={i}
+                                  ref={isActive ? activeLyricRef : null}
+                                  className={`
+                                    text-left transition-all duration-500 cursor-pointer leading-relaxed tracking-wide
+                                    font-serif italic
+                                    ${isActive 
+                                      ? 'text-2xl md:text-4xl font-bold scale-105' 
+                                      : isPast 
+                                        ? 'text-lg md:text-xl text-white/25' 
+                                        : 'text-lg md:text-xl text-white/35'
+                                    }
+                                    ${distance > 3 ? 'opacity-20' : ''}
+                                    hover:text-white/60
+                                  `}
+                                  style={isActive ? { 
+                                    color: lyricAccentColor,
+                                    textShadow: `0 0 20px ${lyricAccentColor}, 0 0 40px ${lyricAccentColor}40, 0 0 60px ${lyricAccentColor}20`
+                                  } : undefined}
+                                  onClick={(e) => { e.stopPropagation(); seekTo(line.time) }}
+                                >
+                                  {line.text}
+                                </p>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <div className="flex h-full flex-col items-center justify-center">
+                            <p className="text-white/40 text-center whitespace-pre-wrap leading-loose max-w-md">
+                              {plainLyrics || 'No lyrics available for this song.'}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 </SheetContent>
               </Sheet>

@@ -188,3 +188,17 @@ All colors MUST be HSL.
     scrollbar-color: hsl(var(--primary) / 0.5) hsl(var(--background));
   }
 }
+
+/* Lyrics gradient animation - subtle glow effect */
+@keyframes gradient-glow {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.1);
+  }
+}
+
+.lyrics-animated-bg {
+  animation: gradient-glow 8s ease-in-out;
+}

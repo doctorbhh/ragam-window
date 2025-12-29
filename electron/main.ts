@@ -1,7 +1,10 @@
-import { app, BrowserWindow, ipcMain, session, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, session, dialog, Tray, Menu, nativeImage } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { execFile } from 'child_process' // Import native executor
+import { initPluginHandlers } from './pluginHandler'
+import { initSpotifyHandlers } from './spotifyHandler'
+import { spotifyAuth } from './spotifyAuth'
 
 // 1. STANDARD CONFIGURATION
 app.commandLine.appendSwitch('ignore-certificate-errors')
@@ -281,7 +284,7 @@ const loadSongPreferences = (): Record<string, SongPreference> => {
       const data = fs.readFileSync(SONG_PREFS_FILE, 'utf-8')
       return JSON.parse(data)
     }
-  } catch (e) {
+  } catch (e) { 
     console.error('Error loading song preferences:', e)
   }
   return {}
@@ -365,10 +368,43 @@ ipcMain.handle('song-pref-clear', async () => {
   }
 })
 
+// --- SPOTIFY SESSION STORAGE ---
+const SPOTIFY_STORAGE_FILE = path.join(app.getPath('userData'), 'spotify-session.json');
+
+interface SpotifySession {
+  accessToken: string;
+  accessTokenExpirationTimestampMs: number;
+  clientId?: string;
+  isAnonymous?: boolean;
+  spDcCookie: string;
+  savedAt: number;
+}
+
+const saveSpotifySession = (session: SpotifySession) => {
+  try {
+    fs.writeFileSync(SPOTIFY_STORAGE_FILE, JSON.stringify(session, null, 2));
+    console.log('[Spotify] Session saved');
+  } catch (e) {
+    console.error('Error saving Spotify session:', e);
+  }
+};
+
+const loadSpotifySession = (): SpotifySession | null => {
+  try {
+    if (fs.existsSync(SPOTIFY_STORAGE_FILE)) {
+      return JSON.parse(fs.readFileSync(SPOTIFY_STORAGE_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Error loading Spotify session:', e);
+  }
+  return null;
+};
+
 process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(__dirname, '../public')
 
 let win: BrowserWindow | null
+let tray: Tray | null = null
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
 // --- PATH LOGIC ---
@@ -446,6 +482,18 @@ function createWindow() {
     }
   )
 
+  // SPOTIFY COOKIE INTERCEPTOR (Allows sp_dc cookie authentication)
+  // Chromium normally blocks setting Cookie header from fetch()
+  // This interceptor allows it for Spotify's token endpoint
+  win.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ['https://open.spotify.com/get_access_token*'] },
+    (details, callback) => {
+      // Allow the Cookie header that was set in the fetch request
+      // No modification needed, just pass through
+      callback({ requestHeaders: details.requestHeaders })
+    }
+  )
+
   // --- DOWNLOAD HANDLER ---
   win.webContents.session.on('will-download', (event, item, webContents) => {
     const url = item.getURL()
@@ -493,7 +541,74 @@ function createWindow() {
   } else {
     win.loadFile(path.join(process.env.DIST || '', 'index.html'))
   }
+
+  // --- SYSTEM TRAY ---
+  if (!tray) {
+    // Create a simple 16x16 icon programmatically (Electron tray doesn't support SVG on Windows)
+    // Using a data URL for a simple music note icon
+    const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADfSURBVDiNpZMxDoJAEEXfLhYmFjZewMbGxMQLeBN7C2+gd7Cx9AYcwNLL2GhjZ2dBQmICsptQCJBlJ5Ns8f/szOwfYKG1fkhBLoANsAMiYGcavsLME7AH4tQnhMBDAGugBlrmWQEBsAXutNYnM/8K7A1rlFJlEi+B+H8MEbABbrXWRynnBRb/JQihYg4wBrrm/hxomLlvYEFmDuwDG6BttN4FXGQZEAPXQNnMbcKQKaVKJdADQq31ycRChh4wABpG6x0hjYGhuT8DamYOZv6aWMjLwNDcHwNV8/cBeAe/iyFO7WBXRQAAAABJRU5ErkJggg=='
+    
+    const trayIcon = nativeImage.createFromDataURL(iconDataUrl)
+    
+    tray = new Tray(trayIcon)
+    tray.setToolTip('Ragam Music Player')
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show App',
+        click: () => {
+          if (win) {
+            win.show()
+            win.focus()
+          }
+        }
+      },
+      {
+        label: 'Minimize to Tray',
+        click: () => {
+          win?.hide()
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Play/Pause',
+        click: () => {
+          win?.webContents.send('tray-playpause')
+        }
+      },
+      {
+        label: 'Next Track',
+        click: () => {
+          win?.webContents.send('tray-next')
+        }
+      },
+      {
+        label: 'Previous Track',
+        click: () => {
+          win?.webContents.send('tray-previous')
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          app.quit()
+        }
+      }
+    ])
+
+    tray.setContextMenu(contextMenu)
+    
+    // Double-click tray icon to show window
+    tray.on('double-click', () => {
+      if (win) {
+        win.show()
+        win.focus()
+      }
+    })
+  }
 }
+
 
 // ==========================================================
 // --- 1. YOUTUBE HANDLERS (Native execFile) ---
@@ -687,9 +802,10 @@ ipcMain.handle('download-start', async (_, { url, filename, saveAs }) => {
 })
 
 // ==========================================================
-// --- 2. SPOTIFY AUTH ---
+// --- 2. SPOTIFY AUTH (Using sonic-liberation approach) ---
 // ==========================================================
 
+// Updated: spotify-login handler
 ipcMain.handle('spotify-login', async () => {
   return new Promise((resolve, reject) => {
     const authWindow = new BrowserWindow({
@@ -703,70 +819,159 @@ ipcMain.handle('spotify-login', async () => {
         partition: 'persist:spotify_login',
         webSecurity: false
       }
-    })
+    });
 
-    const authSession = authWindow.webContents.session
+    const authSession = authWindow.webContents.session;
 
+    // Block service workers
     authSession.webRequest.onBeforeRequest(
       { urls: ['*://*.spotify.com/*/service-worker.js'] },
       (details, callback) => {
-        callback({ cancel: true })
+        callback({ cancel: true });
       }
-    )
+    );
 
-    authWindow.loadURL('https://accounts.spotify.com/en/login')
+    authWindow.loadURL('https://accounts.spotify.com/en/login');
 
-    let isResolved = false
+    let isResolved = false;
+    let spDcCookie: string | null = null;
 
-    const checkCookie = async () => {
-      if (isResolved || authWindow.isDestroyed()) return
+    // Enhanced checkLoginSuccess
+    const checkLoginSuccess = async () => {
+      if (isResolved || authWindow.isDestroyed()) return;
+
       try {
-        const cookies = await authSession.cookies.get({ name: 'sp_dc' })
-        if (cookies.length > 0) {
-          const currentUrl = authWindow.webContents.getURL()
+        const currentUrl = authWindow.webContents.getURL();
+
+        if (currentUrl.includes('accounts.spotify.com/en/status') || 
+            currentUrl.includes('open.spotify.com')) {
+          
+          // If still on accounts, navigate to open.spotify.com for proper domain/cookies
           if (currentUrl.includes('accounts.spotify.com')) {
-            clearInterval(cookieInterval)
-            await authWindow.loadURL('https://open.spotify.com')
+            console.log('[Spotify Auth] Redirecting to open.spotify.com');
+            authWindow.loadURL('https://open.spotify.com/');
+            return; // Wait for next interval
+          }
+
+          // Now on open.spotify.com, get sp_dc cookie
+          const cookies = await authSession.cookies.get({ 
+            name: 'sp_dc', 
+            url: 'https://open.spotify.com' 
+          });
+          if (cookies.length === 0) {
+            console.log('[Spotify Auth] No sp_dc cookie yet, retrying...');
+            return;
+          }
+
+          spDcCookie = cookies[0].value;
+          console.log('[Spotify Auth] Got sp_dc cookie, length:', spDcCookie.length);
+
+          // Stop checking
+          clearInterval(cookieCheckInterval);
+
+          // Use TOTP auth to get token (bypasses 403 blocking)
+          console.log('[Spotify Auth] Using TOTP authentication...');
+          try {
+            const result = await spotifyAuth.loginWithSpDc(spDcCookie);
+            
+            if (result.success && result.accessToken) {
+              console.log('[Spotify Auth] TOTP login successful');
+              
+              const session: SpotifySession = {
+                accessToken: result.accessToken,
+                accessTokenExpirationTimestampMs: result.expiration || (Date.now() + 3600000),
+                clientId: '',
+                isAnonymous: false,
+                spDcCookie: spDcCookie,
+                savedAt: Date.now()
+              };
+
+              saveSpotifySession(session);
+              isResolved = true;
+              resolve(session);
+
+              setTimeout(() => {
+                if (!authWindow.isDestroyed()) authWindow.close();
+              }, 500);
+            } else {
+              throw new Error(result.error || 'TOTP login failed');
+            }
+          } catch (authError: any) {
+            console.error('[Spotify Auth] TOTP error:', authError);
+            reject(new Error(`Token fetch failed: ${authError.message}`));
+            authWindow.close();
           }
         }
       } catch (error) {
-        console.error(error)
+        console.error('[Spotify Auth] Check error:', error);
       }
-    }
+    };
 
-    const cookieInterval = setInterval(checkCookie, 1000)
-
-    try {
-      authWindow.webContents.debugger.attach('1.3')
-    } catch (err) {}
-
-    authWindow.webContents.debugger.on('message', async (event, method, params) => {
-      if (method === 'Network.responseReceived' && params.response.url.includes('/api/token')) {
-        try {
-          const res = await authWindow.webContents.debugger.sendCommand('Network.getResponseBody', {
-            requestId: params.requestId
-          })
-          if (res.body) {
-            const data = JSON.parse(res.body)
-            if (data.accessToken) {
-              isResolved = true
-              resolve(data)
-              setTimeout(() => {
-                if (!authWindow.isDestroyed()) authWindow.close()
-              }, 500)
-            }
-          }
-        } catch (err) {}
-      }
-    })
-    authWindow.webContents.debugger.sendCommand('Network.enable')
+    const cookieCheckInterval = setInterval(checkLoginSuccess, 1000);
 
     authWindow.on('closed', () => {
-      clearInterval(cookieInterval)
-      if (!isResolved) console.log('Auth closed')
-    })
-  })
-})
+      clearInterval(cookieCheckInterval);
+      if (!isResolved) {
+        reject(new Error('Login cancelled by user'));
+      }
+    });
+  });
+});
+
+// Updated: spotify-refresh-token handler using TOTP auth
+ipcMain.handle('spotify-refresh-token', async (_, storedSpDc?: string) => {
+  if (!storedSpDc) {
+    const session = loadSpotifySession();
+    if (!session) return { success: false, error: 'No stored session' };
+    storedSpDc = session.spDcCookie;
+  }
+
+  console.log('[Spotify Refresh] Using TOTP authentication...');
+  try {
+    const result = await spotifyAuth.loginWithSpDc(storedSpDc);
+    
+    if (result.success && result.accessToken) {
+      // Update session file
+      const session: SpotifySession = {
+        accessToken: result.accessToken,
+        accessTokenExpirationTimestampMs: result.expiration || (Date.now() + 3600000),
+        clientId: '',
+        isAnonymous: false,
+        spDcCookie: storedSpDc,
+        savedAt: Date.now()
+      };
+      saveSpotifySession(session);
+      
+      return {
+        success: true,
+        accessToken: result.accessToken,
+        accessTokenExpirationTimestampMs: result.expiration
+      };
+    } else {
+      return { success: false, error: result.error };
+    }
+  } catch (e: any) {
+    console.error('[Spotify Refresh] TOTP error:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Optional: Add a handler to check/load existing session
+ipcMain.handle('spotify-check-session', async () => {
+  const session = loadSpotifySession();
+  if (session && Date.now() < session.accessTokenExpirationTimestampMs) {
+    return { success: true, ...session };
+  }
+  return { success: false };
+});
+
+// Optional: Clear session
+ipcMain.handle('spotify-logout', async () => {
+  if (fs.existsSync(SPOTIFY_STORAGE_FILE)) {
+    fs.unlinkSync(SPOTIFY_STORAGE_FILE);
+  }
+  return { success: true };
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -781,4 +986,8 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  initPluginHandlers()
+  initSpotifyHandlers()
+  createWindow()
+})

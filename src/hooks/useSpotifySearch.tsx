@@ -32,9 +32,6 @@ export const useSpotifySearch = () => {
       const tracks = trackData.tracks?.items || [];
       const albums = albumData.albums?.items || [];
       
-      console.log('[useSpotifySearch] Album search result:', albumData);
-      console.log('[useSpotifySearch] Albums found:', albums.length, albums);
-      
       setSearchResults(tracks);
       setAlbumResults(albums);
       return tracks;

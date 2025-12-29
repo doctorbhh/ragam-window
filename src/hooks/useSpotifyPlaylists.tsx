@@ -32,18 +32,12 @@ export const useSpotifyPlaylists = () => {
 
       // Fetch liked songs
       const likedData = await getSavedTracks(spotifyToken, 0, 20);
+      console.log('[Hook] Liked data from IPC:', JSON.stringify(likedData?.items?.[0] || 'EMPTY', null, 2));
       setLikedSongs(likedData.items || []);
 
-      // Fetch recently played tracks
-      const recentResponse = await fetch("https://api.spotify.com/v1/me/player/recently-played?limit=6", {
-        headers: {
-          Authorization: `Bearer ${spotifyToken}`,
-        },
-      });
-      if (recentResponse.ok) {
-        const recentData = await recentResponse.json();
-        setRecentlyPlayed(recentData.items || []);
-      }
+      // Recently played endpoint causes 429 errors (no GraphQL equivalent available)
+      // Disabling for now to avoid rate limits
+      setRecentlyPlayed([]);
     } catch (error) {
       console.error("Error fetching Spotify data:", error);
     } finally {

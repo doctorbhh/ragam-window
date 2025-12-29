@@ -111,6 +111,39 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [queue, currentTrack, repeatMode])
 
+  // Listen for tray playback control events
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electron?.tray) {
+      window.electron.tray.onPlayPause(() => {
+        if (audioRef.current.paused) {
+          audioRef.current.play()
+          setIsPlaying(true)
+        } else {
+          audioRef.current.pause()
+          setIsPlaying(false)
+        }
+      })
+      
+      window.electron.tray.onNext(() => {
+        const currentIndex = queue.findIndex((t) => t.id === currentTrack?.id)
+        if (currentIndex < queue.length - 1) {
+          playTrack(queue[currentIndex + 1])
+        }
+      })
+      
+      window.electron.tray.onPrevious(() => {
+        const currentIndex = queue.findIndex((t) => t.id === currentTrack?.id)
+        if (currentIndex > 0) {
+          playTrack(queue[currentIndex - 1])
+        }
+      })
+
+      return () => {
+        window.electron.tray.removeAllListeners()
+      }
+    }
+  }, [queue, currentTrack])
+
   const fetchStreamUrl = async (item: any) => {
     if (item.url && item.url.startsWith('http')) {
       const durationSec = item.duration_ms ? item.duration_ms / 1000 : 0

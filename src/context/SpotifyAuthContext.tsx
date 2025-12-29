@@ -1,116 +1,216 @@
-import React, { createContext, useState, useContext, useEffect } from 'react'
-import { toast } from 'sonner'
-// Make sure this path exists. If not, remove the import and use 'any' for now.
-import { SpotifyUser } from '../types/spotify'
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 
-interface AuthContextType {
-  isAuthenticated: boolean
-  loading: boolean
-  user: SpotifyUser | null
-  spotifyToken: string | null
-  login: () => void
-  logout: () => void
+interface SpotifyUser {
+  id: string
+  displayName: string
+  email?: string
+  image?: string
+  images?: { url: string }[]
+  country?: string
+  product?: string
 }
 
-const AuthContext = createContext<AuthContextType>({
-  isAuthenticated: false,
-  loading: true,
-  user: null,
-  spotifyToken: null,
-  login: () => {},
-  logout: () => {}
-})
+interface SpotifyAuthContextType {
+  isAuthenticated: boolean
+  spotifyToken: string | null
+  spotifyUser: SpotifyUser | null
+  user: { id: string; display_name: string; email?: string; images?: { url: string }[] } | null
+  isLoading: boolean
+  login: () => Promise<void>
+  loginWithCookie: (spDcCookie: string) => Promise<void>
+  logout: () => void
+  refreshToken: () => Promise<void>
+  showSpDcDialog: boolean
+  setShowSpDcDialog: (show: boolean) => void
+}
 
-export const useSpotifyAuth = () => useContext(AuthContext)
+const SpotifyAuthContext = createContext<SpotifyAuthContextType | undefined>(undefined)
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState<SpotifyUser | null>(null)
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null)
+  const [spotifyUser, setSpotifyUser] = useState<SpotifyUser | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [showSpDcDialog, setShowSpDcDialog] = useState(false)
 
+  // Fetch user profile using IPC (avoids 429)
+  const fetchUserProfile = async (_token: string) => {
+    try {
+      // @ts-ignore
+      const data = await window.electron.spotify.getMe()
+      
+      if (!data) {
+        console.warn('[Auth] Profile fetch failed')
+        return null
+      }
+      
+      console.log('[Auth] Profile fetched:', data.display_name)
+      
+      return {
+        id: data.id,
+        displayName: data.display_name,
+        email: data.email,
+        image: data.images?.[0]?.url,
+        images: data.images,
+        country: data.country,
+        product: data.product
+      }
+    } catch (error) {
+      console.error('[Auth] Profile fetch error:', error)
+      return null
+    }
+  }
+
+  // Check for existing session on load
   useEffect(() => {
-    // Check if we have a valid token saved from before
-    const token = localStorage.getItem('spotify_token')
-    const expiresAt = localStorage.getItem('spotify_expires_at')
+    const checkSession = async () => {
+      console.log('[Auth] Checking for existing session...')
+      try {
+        // @ts-ignore
+        const session = await window.electron.refreshToken()
+        
+        if (session?.success && session.accessToken) {
+          console.log('[Auth] Found valid session')
+          setSpotifyToken(session.accessToken)
+          setIsAuthenticated(true)
+          
+          const profile = await fetchUserProfile(session.accessToken)
+          if (profile) {
+            setSpotifyUser(profile)
+          }
+        } else {
+          console.log('[Auth] No valid session found')
+        }
+      } catch (error) {
+        console.error('[Auth] Session check error:', error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
 
-    if (token && expiresAt && Date.now() < parseInt(expiresAt)) {
-      setSpotifyToken(token)
-      fetchUserProfile(token)
-    } else {
-      setLoading(false)
+    checkSession()
+  }, [])
+
+  // OAuth Login (opens Spotify login window)
+  const login = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      // @ts-ignore
+      const result = await window.electron.login()
+      
+      if (result?.accessToken) {
+        console.log('[Auth] Login successful')
+        setSpotifyToken(result.accessToken)
+        setIsAuthenticated(true)
+        
+        const profile = await fetchUserProfile(result.accessToken)
+        if (profile) {
+          setSpotifyUser(profile)
+        }
+      } else {
+        console.error('[Auth] Login failed:', (result as any)?.error)
+      }
+    } catch (error) {
+      console.error('[Auth] Login error:', error)
+    } finally {
+      setIsLoading(false)
     }
   }, [])
 
-  const fetchUserProfile = async (token: string) => {
+  // Login with sp_dc cookie
+  const loginWithCookie = useCallback(async (spDcCookie: string) => {
+    setIsLoading(true)
     try {
-      // Use the official API to get user details
-      const response = await fetch('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch profile: ${response.status}`)
-      }
-
-      const userData = await response.json()
-      setUser(userData)
-      setIsAuthenticated(true)
-    } catch (error) {
-      console.error('Auth check failed:', error)
-      logout()
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // --- THIS IS THE PART THAT WAS WRONG BEFORE ---
-  const login = async () => {
-    try {
-      setLoading(true)
-
-      // 1. Tell Electron to open the login window and steal the cookie
       // @ts-ignore
-      const data = await window.electron.login()
-
-      console.log('Electron Login Data:', data) // Debugging
-
-      if (!data || !data.accessToken) {
-        throw new Error('No access token received from Electron')
+      const result = await window.electron.refreshToken(spDcCookie)
+      
+      if (result?.success && result.accessToken) {
+        console.log('[Auth] Cookie login successful')
+        setSpotifyToken(result.accessToken)
+        setIsAuthenticated(true)
+        
+        const profile = await fetchUserProfile(result.accessToken)
+        if (profile) {
+          setSpotifyUser(profile)
+        }
+      } else {
+        console.error('[Auth] Cookie login failed:', result?.error)
+        throw new Error(result?.error || 'Login failed')
       }
-
-      const token = data.accessToken
-      const expiresAt = data.accessTokenExpirationTimestampMs
-
-      // 2. Save the stolen token
-      localStorage.setItem('spotify_token', token)
-      localStorage.setItem('spotify_expires_at', expiresAt.toString())
-
-      setSpotifyToken(token)
-
-      // 3. Fetch user data
-      await fetchUserProfile(token)
-      toast.success('Logged in successfully!')
     } catch (error) {
-      console.error('Login failed', error)
-      toast.error('Login failed. Please try again.')
-      setLoading(false)
+      console.error('[Auth] Cookie login error:', error)
+      throw error
+    } finally {
+      setIsLoading(false)
     }
-  }
-  // ----------------------------------------------
+  }, [])
 
-  const logout = () => {
-    localStorage.removeItem('spotify_token')
-    localStorage.removeItem('spotify_expires_at')
-    setIsAuthenticated(false)
-    setUser(null)
+  // Refresh token
+  const refreshToken = useCallback(async () => {
+    try {
+      // @ts-ignore
+      const result = await window.electron.refreshToken()
+      
+      if (result?.success && result.accessToken) {
+        setSpotifyToken(result.accessToken)
+        setIsAuthenticated(true)
+        
+        const profile = await fetchUserProfile(result.accessToken)
+        if (profile) {
+          setSpotifyUser(profile)
+        }
+      }
+    } catch (error) {
+      console.error('[Auth] Refresh error:', error)
+    }
+  }, [])
+
+  // Logout
+  const logout = useCallback(() => {
     setSpotifyToken(null)
-    setLoading(false)
-  }
+    setSpotifyUser(null)
+    setIsAuthenticated(false)
+    // Note: The actual session file would need to be cleared on the main process
+  }, [])
+
+  // Create user object with display_name for Header.tsx compatibility
+  const user = spotifyUser ? {
+    id: spotifyUser.id,
+    display_name: spotifyUser.displayName,
+    email: spotifyUser.email,
+    images: spotifyUser.images
+  } : null
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, loading, user, spotifyToken, login, logout }}>
+    <SpotifyAuthContext.Provider
+      value={{
+        isAuthenticated,
+        spotifyToken,
+        spotifyUser,
+        user,
+        isLoading,
+        login,
+        loginWithCookie,
+        logout,
+        refreshToken,
+        showSpDcDialog,
+        setShowSpDcDialog
+      }}
+    >
       {children}
-    </AuthContext.Provider>
+    </SpotifyAuthContext.Provider>
   )
 }
+
+export const useSpotifyAuth = () => {
+  const context = useContext(SpotifyAuthContext)
+  if (!context) {
+    throw new Error('useSpotifyAuth must be used within a SpotifyAuthProvider')
+  }
+  return context
+}
+
+// Alias for App.tsx compatibility
+export const AuthProvider = SpotifyAuthProvider
+
+export default SpotifyAuthContext

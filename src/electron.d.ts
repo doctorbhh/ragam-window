@@ -29,7 +29,37 @@ interface SongPreference {
 declare global {
   interface Window {
     electron: {
-      login: () => Promise<{ accessToken: string; accessTokenExpirationTimestampMs: number }>
+      login: () => Promise<{ accessToken: string; accessTokenExpirationTimestampMs: number; spDcCookie?: string }>
+      refreshToken: (spDcCookie: string) => Promise<{ success: boolean; accessToken?: string; accessTokenExpirationTimestampMs?: number; error?: string }>
+      
+      spotify: {
+        login: (spDcCookie: string) => Promise<any>
+        logout: () => Promise<void>
+        refreshToken: () => Promise<any>
+        checkSession: () => Promise<any>
+        getStatus: () => Promise<any>
+        search: (query: string, limit?: number, type?: string) => Promise<any>
+        searchTracks: (query: string, limit?: number) => Promise<any>
+        getTrack: (trackId: string) => Promise<any>
+        getTracks: (trackIds: string[]) => Promise<any>
+        getAlbum: (albumId: string) => Promise<any>
+        getArtist: (artistId: string) => Promise<any>
+        getArtistTopTracks: (artistId: string, market?: string) => Promise<any>
+        getPlaylist: (playlistId: string) => Promise<any>
+        getLyrics: (trackId: string) => Promise<any>
+        getRecommendations: (seeds: any, limit?: number) => Promise<any>
+        getMe: () => Promise<any>
+        getMyPlaylists: (limit?: number, offset?: number) => Promise<any>
+        getSavedTracks: (limit?: number, offset?: number) => Promise<any>
+        getPlaylistTracks: (playlistId: string, limit?: number, offset?: number) => Promise<any>
+        getRecentlyPlayed: (limit?: number) => Promise<any>
+        getTopTracks: (timeRange?: string, limit?: number) => Promise<any>
+        getTopArtists: (timeRange?: string, limit?: number) => Promise<any>
+        checkSavedTracks: (trackIds: string[]) => Promise<boolean[]>
+        saveTracks: (trackIds: string[]) => Promise<boolean>
+        removeTracks: (trackIds: string[]) => Promise<boolean>
+        getHome: () => Promise<any>
+      }
 
       youtube: {
         search: (query: string, region?: string) => Promise<any[]>
@@ -72,6 +102,45 @@ declare global {
         list: () => Promise<Record<string, SongPreference>>
         clear: () => Promise<boolean>
       }
+
+      tray: {
+        onPlayPause: (callback: () => void) => void
+        onNext: (callback: () => void) => void
+        onPrevious: (callback: () => void) => void
+        removeAllListeners: () => void
+      }
+
+      plugins: {
+        list: () => Promise<PluginManifest[]>
+        loadCode: (pluginId: string) => Promise<string>
+        installFromUrl: (url: string) => Promise<{ success: boolean; manifest?: PluginManifest; error?: string }>
+        installFromFile: (data: ArrayBuffer, filename: string) => Promise<{ success: boolean; manifest?: PluginManifest; error?: string }>
+        uninstall: (pluginId: string) => Promise<boolean>
+        getSettings: () => Promise<PluginSettings>
+        saveSettings: (settings: PluginSettings) => Promise<boolean>
+      }
     }
   }
+}
+
+interface PluginManifest {
+  id: string
+  name: string
+  version: string
+  author: string
+  description: string
+  type: 'metadata' | 'auth' | 'source' | 'scrobbler' | 'lyrics'
+  entry: string
+  abilities: string[]
+  apis: string[]
+  icon?: string
+  homepage?: string
+  repository?: string
+}
+
+interface PluginSettings {
+  installedPlugins: { [id: string]: { enabled: boolean; settings?: any } }
+  activeMetadataPlugin?: string
+  activeAuthPlugin?: string
+  activeSourcePlugin?: string
 }

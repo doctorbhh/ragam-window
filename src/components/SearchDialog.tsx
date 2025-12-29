@@ -31,9 +31,6 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
   const { search, searching, searchResults, albumResults } = useSpotifySearch()
   const { isAuthenticated, spotifyToken } = useSpotifyAuth()
   const { playTrack, addManyToQueue } = usePlayer()
-  
-  // Debug album results
-  console.log('[SearchDialog] albumResults:', albumResults?.length, albumResults)
 
   // Spotify search
   useEffect(() => {

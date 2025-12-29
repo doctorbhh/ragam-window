@@ -1,132 +1,167 @@
-import { SpotifyPlaylist, SpotifyTrackResponse, SpotifyPlaylistsResponse, SpotifyTrackItem } from "@/types/spotify";
+// spotifyservice.ts - Uses IPC handlers instead of direct API calls to avoid 429
 
-const BASE_URL = "https://api.spotify.com/v1";
+// @ts-ignore - window.electron types
+const electron = window.electron;
 
-// Helper function to make authenticated requests to Spotify API
-const spotifyFetch = async (endpoint: string, token: string) => {
+// Get user's playlists via IPC
+export const getUserPlaylists = async (
+  _token: string, // kept for compatibility but not used
+  offset = 0,
+  limit = 50
+) => {
   try {
-    const response = await fetch(`${BASE_URL}${endpoint}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Spotify API error: ${response.status}`);
-    }
-
-    return await response.json();
+    return await electron.spotify.getMyPlaylists(limit, offset);
   } catch (error) {
-    console.error("Spotify API error:", error);
+    console.error("getUserPlaylists IPC error:", error);
     throw error;
   }
 };
 
-// Get user's playlists
-export const getUserPlaylists = async (
-  token: string,
-  offset = 0,
-  limit = 50
-): Promise<SpotifyPlaylistsResponse> => {
-  return spotifyFetch(`/me/playlists?offset=${offset}&limit=${limit}`, token);
-};
-
-// Get a specific playlist
+// Get a specific playlist via IPC
 export const getPlaylist = async (
-  token: string,
+  _token: string,
   playlistId: string
-): Promise<SpotifyPlaylist> => {
-  return spotifyFetch(`/playlists/${playlistId}`, token);
+) => {
+  try {
+    return await electron.spotify.getPlaylist(playlistId);
+  } catch (error) {
+    console.error("getPlaylist IPC error:", error);
+    throw error;
+  }
 };
 
-// Get tracks in a playlist
+// Get tracks in a playlist via IPC
 export const getPlaylistTracks = async (
-  token: string,
+  _token: string,
   playlistId: string,
   offset = 0,
   limit = 50
-): Promise<SpotifyTrackResponse> => {
-  return spotifyFetch(`/playlists/${playlistId}/tracks?offset=${offset}&limit=${limit}`, token);
-};
-
-// Get all tracks in a playlist (handles pagination)
-export const getAllPlaylistTracks = async (
-  token: string,
-  playlistId: string
-): Promise<SpotifyTrackItem[]> => {
-  const allTracks: SpotifyTrackItem[] = [];
-  let offset = 0;
-  const limit = 100; // Max allowed by Spotify API
-  let hasMore = true;
-
-  while (hasMore) {
-    try {
-      const response = await getPlaylistTracks(token, playlistId, offset, limit);
-      allTracks.push(...response.items);
-      
-      if (!response.next) {
-        hasMore = false;
-      } else {
-        offset += limit;
-      }
-    } catch (error) {
-      console.error('Error fetching playlist tracks:', error);
-      hasMore = false;
-    }
+) => {
+  try {
+    return await electron.spotify.getPlaylistTracks(playlistId, limit, offset);
+  } catch (error) {
+    console.error("getPlaylistTracks IPC error:", error);
+    throw error;
   }
-
-  return allTracks;
 };
 
-// Get user's saved/liked tracks
+// Get user's saved/liked tracks via IPC
 export const getSavedTracks = async (
-  token: string,
+  _token: string,
   offset = 0,
   limit = 50
-): Promise<SpotifyTrackResponse> => {
-  return spotifyFetch(`/me/tracks?offset=${offset}&limit=${limit}`, token);
+) => {
+  try {
+    return await electron.spotify.getSavedTracks(limit, offset);
+  } catch (error) {
+    console.error("getSavedTracks IPC error:", error);
+    throw error;
+  }
 };
 
-// Search for tracks
+// Search for tracks via IPC
 export const searchTracks = async (
-  token: string,
+  _token: string,
   query: string,
   offset = 0,
   limit = 20
 ) => {
-  return spotifyFetch(
-    `/search?q=${encodeURIComponent(query)}&type=track&offset=${offset}&limit=${limit}`,
-    token
-  );
+  try {
+    return await electron.spotify.searchTracks(query, limit);
+  } catch (error) {
+    console.error("searchTracks IPC error:", error);
+    throw error;
+  }
 };
 
-// Search for albums
+// Search for albums via IPC  
 export const searchAlbums = async (
-  token: string,
+  _token: string,
   query: string,
   offset = 0,
   limit = 10
 ) => {
-  return spotifyFetch(
-    `/search?q=${encodeURIComponent(query)}&type=album&offset=${offset}&limit=${limit}`,
-    token
-  );
+  try {
+    // Use full search and extract albums
+    const results = await electron.spotify.search(query, limit);
+    return { albums: { items: results.albums || [] } };
+  } catch (error) {
+    console.error("searchAlbums IPC error:", error);
+    throw error;
+  }
 };
 
-// Get tracks in an album
+// Get tracks in an album via IPC
 export const getAlbumTracks = async (
-  token: string,
+  _token: string,
   albumId: string
 ) => {
-  return spotifyFetch(`/albums/${albumId}/tracks?limit=50`, token);
+  try {
+    return await electron.spotify.getAlbum(albumId);
+  } catch (error) {
+    console.error("getAlbumTracks IPC error:", error);
+    throw error;
+  }
 };
 
-// Get album details with tracks
+// Get album details via IPC
 export const getAlbum = async (
-  token: string,
+  _token: string,
   albumId: string
 ) => {
-  return spotifyFetch(`/albums/${albumId}`, token);
+  try {
+    return await electron.spotify.getAlbum(albumId);
+  } catch (error) {
+    console.error("getAlbum IPC error:", error);
+    throw error;
+  }
 };
 
-export { spotifyFetch };
+// Get all tracks in a playlist (handles pagination)
+export const getAllPlaylistTracks = async (
+  _token: string,
+  playlistId: string
+) => {
+  try {
+    const allTracks: any[] = [];
+    let offset = 0;
+    const limit = 50;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await electron.spotify.getPlaylistTracks(playlistId, limit, offset);
+      // Unwrap {track: SpotifyTrack} to just SpotifyTrack for Playlist.tsx
+      // Filter out undefined/null tracks
+      const unwrappedTracks = (response.items || [])
+        .map((item: any) => item?.track || item)
+        .filter((track: any) => track && track.id);
+      allTracks.push(...unwrappedTracks);
+      
+      if (!response.next || response.items.length < limit) {
+        hasMore = false;
+      } else {
+        offset += limit;
+      }
+    }
+
+    return allTracks;
+  } catch (error) {
+    console.error("getAllPlaylistTracks IPC error:", error);
+    throw error;
+  }
+};
+
+// Get Home/Browse sections via IPC
+export const getHome = async (_token: string) => {
+  try {
+    return await electron.spotify.getHome();
+  } catch (error) {
+    console.error("getHome IPC error:", error);
+    throw error;
+  }
+};
+
+// Legacy helper - throws error to indicate IPC should be used
+export const spotifyFetch = async (_endpoint: string, _token: string) => {
+  throw new Error('Direct Spotify API calls are deprecated. Use IPC handlers via window.electron.spotify instead.');
+};

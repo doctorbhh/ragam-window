@@ -1,0 +1,26 @@
+{
+  "id": "spotify-metadata",
+  "name": "Spotify Metadata",
+  "version": "1.0.0",
+  "author": "Ragam",
+  "description": "Provides Spotify metadata for playlists, albums, artists, and tracks",
+  "type": "metadata",
+  "entry": "index.js",
+  "icon": "spotify-icon.png",
+  "homepage": "https://github.com/your-username/ragam-spotify-plugin",
+  "repository": "https://github.com/your-username/ragam-spotify-plugin",
+  "abilities": [
+    "search",
+    "getTrack",
+    "getAlbum",
+    "getArtist",
+    "getPlaylist",
+    "getUserPlaylists",
+    "login",
+    "logout"
+  ],
+  "apis": [
+    "fetch",
+    "localStorage"
+  ]
+}

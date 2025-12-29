@@ -143,7 +143,7 @@ export function Sidebar({ className }: SidebarProps) {
                           {playlist.name}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {playlist.tracks?.total || 0} tracks
+                          {playlist.tracks?.total ? `${playlist.tracks.total} tracks` : 'Playlist'}
                         </p>
                       </div>
                     </div>

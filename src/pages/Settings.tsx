@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Trash2,
   Signal,
@@ -6,7 +6,12 @@ import {
   Globe,
   MapPin,
   HardDrive,
-  Volume2
+  Volume2,
+  Puzzle,
+  Download,
+  Link,
+  Upload,
+  RefreshCw
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -51,6 +56,10 @@ import {
   CacheSettings,
   CacheStats
 } from '@/services/cacheService'
+import { pluginManager } from '@/plugins/PluginManager'
+import { PluginCard } from '@/components/PluginCard'
+import { PluginInstance } from '@/plugins/types'
+import { Input } from '@/components/ui/input'
 
 const REGIONS = [
   { code: 'US', name: 'United States' },
@@ -76,12 +85,32 @@ const Settings = () => {
   const [cacheStats, setCacheStats] = useState<CacheStats>({ count: 0, sizeBytes: 0, sizeMB: 0 })
   const [cacheLoading, setCacheLoading] = useState(false)
 
+  // Plugin state
+  const [plugins, setPlugins] = useState<PluginInstance[]>([])
+  const [pluginsLoading, setPluginsLoading] = useState(false)
+  const [pluginUrl, setPluginUrl] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     setCurrentQuality(getAudioQuality())
     setCurrentProvider(getSearchProvider())
     setCurrentRegion(getSearchRegion())
     setNormalizationEnabled(getAudioNormalization())
     loadCacheSettings()
+    
+    // Initialize plugins
+    const initPlugins = async () => {
+      setPluginsLoading(true)
+      try {
+        await pluginManager.initialize()
+        setPlugins(pluginManager.getPlugins())
+      } catch (e) {
+        console.error('Failed to load plugins:', e)
+      } finally {
+        setPluginsLoading(false)
+      }
+    }
+    initPlugins()
   }, [])
 
   const handleQualityChange = (value: string) => {
@@ -154,11 +183,173 @@ const Settings = () => {
     }
   }
 
+  // Plugin handlers
+  const loadPlugins = async () => {
+    setPluginsLoading(true)
+    try {
+      await pluginManager.initialize()
+      setPlugins(pluginManager.getPlugins())
+    } catch (e) {
+      console.error('Failed to load plugins:', e)
+    } finally {
+      setPluginsLoading(false)
+    }
+  }
+
+  const handlePluginEnable = async (pluginId: string, enabled: boolean) => {
+    await pluginManager.setPluginEnabled(pluginId, enabled)
+    setPlugins(pluginManager.getPlugins())
+    toast.success(enabled ? 'Plugin enabled' : 'Plugin disabled')
+  }
+
+  const handlePluginUninstall = async (pluginId: string) => {
+    const success = await pluginManager.uninstallPlugin(pluginId)
+    if (success) {
+      setPlugins(pluginManager.getPlugins())
+      toast.success('Plugin uninstalled')
+    } else {
+      toast.error('Failed to uninstall plugin')
+    }
+  }
+
+  const handleInstallFromUrl = async () => {
+    if (!pluginUrl.trim()) {
+      toast.error('Please enter a plugin URL')
+      return
+    }
+    
+    setPluginsLoading(true)
+    try {
+      const result = await pluginManager.installPlugin(pluginUrl.trim())
+      if (result.success) {
+        setPlugins(pluginManager.getPlugins())
+        setPluginUrl('')
+        toast.success('Plugin installed successfully')
+      } else {
+        toast.error(result.error || 'Failed to install plugin')
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to install plugin')
+    } finally {
+      setPluginsLoading(false)
+    }
+  }
+
+  const handleInstallFromFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    
+    setPluginsLoading(true)
+    try {
+      const result = await pluginManager.installPlugin(file)
+      if (result.success) {
+        setPlugins(pluginManager.getPlugins())
+        toast.success('Plugin installed successfully')
+      } else {
+        toast.error(result.error || 'Failed to install plugin')
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to install plugin')
+    } finally {
+      setPluginsLoading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
   return (
     <div className="container mx-auto p-6 max-w-2xl pb-24">
       <h1 className="text-3xl font-bold mb-6">Settings</h1>
 
       <div className="space-y-6">
+        {/* Plugins Section */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Puzzle className="h-5 w-5 text-primary" />
+                <CardTitle>Plugins</CardTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setPluginsLoading(true)
+                  pluginManager.initialize().then(() => {
+                    setPlugins(pluginManager.getPlugins())
+                    setPluginsLoading(false)
+                  })
+                }}
+                disabled={pluginsLoading}
+              >
+                <RefreshCw className={`h-4 w-4 ${pluginsLoading ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+            <CardDescription>
+              Extend functionality with metadata, auth, and streaming plugins.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Install from URL */}
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter plugin URL..."
+                value={pluginUrl}
+                onChange={(e) => setPluginUrl(e.target.value)}
+                className="flex-1"
+              />
+              <Button 
+                onClick={handleInstallFromUrl} 
+                disabled={pluginsLoading || !pluginUrl.trim()}
+              >
+                <Link className="h-4 w-4 mr-2" />
+                Install
+              </Button>
+            </div>
+
+            {/* Install from file */}
+            <div className="flex gap-2">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleInstallFromFile}
+                accept=".js,.json,.zip"
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={pluginsLoading}
+                className="w-full"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Install from File
+              </Button>
+            </div>
+
+            {/* Plugin list */}
+            <div className="space-y-3 mt-4">
+              {plugins.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Puzzle className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                  <p>No plugins installed</p>
+                  <p className="text-sm mt-1">Install plugins to extend functionality</p>
+                </div>
+              ) : (
+                plugins.map((plugin) => (
+                  <PluginCard
+                    key={plugin.manifest.id}
+                    plugin={plugin}
+                    onEnable={handlePluginEnable}
+                    onUninstall={handlePluginUninstall}
+                  />
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Search Provider Settings */}
         <Card className="border-border/50 bg-card/50 backdrop-blur">
           <CardHeader>

@@ -143,7 +143,7 @@ export function AIRecommendations() {
           <p className="text-sm text-muted-foreground mb-4">
             Based on your recent listening history
           </p>
-          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
             {recommendations.slice(0, 12).map((track) => (
               <div key={track.id} className="relative">
                 <SongCard
