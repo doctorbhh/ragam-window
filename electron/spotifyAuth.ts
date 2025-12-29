@@ -118,7 +118,7 @@ export class SpotifyAuthEndpoint extends EventEmitter {
         
         return {
           success: true,
-          accessToken: this._accessToken,
+          accessToken: this._accessToken ?? undefined,
           expiration: this._expiration
         };
       } else {

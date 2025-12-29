@@ -440,108 +440,184 @@ export async function searchAlbums(query: string, offset = 0, limit = 20) {
   };
 }
 
+export async function searchArtists(query: string, offset = 0, limit = 20) {
+  const result = await gqlRequest('searchDesktop', HASHES.searchDesktop, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: false,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+
+  const searchData = result.data?.searchV2;
+  if (!searchData) throw new Error('Artist search failed');
+
+  return {
+    artists: { items: convertSearchArtists(searchData.artists?.items || []) },
+    total: searchData.artists?.totalCount || 0,
+    offset: offset,
+    limit: limit
+  };
+}
+
+export async function searchPlaylists(query: string, offset = 0, limit = 20) {
+  const result = await gqlRequest('searchDesktop', HASHES.searchDesktop, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: false,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+
+  const searchData = result.data?.searchV2;
+  if (!searchData) throw new Error('Playlist search failed');
+
+  return {
+    playlists: { items: convertSearchPlaylists(searchData.playlists?.items || []) },
+    total: searchData.playlists?.totalCount || 0,
+    offset: offset,
+    limit: limit
+  };
+}
+
 // ============ ALBUM ENDPOINTS ============
 
 export async function getAlbum(albumId: string) {
-  console.log('[API] getAlbum called via REST for:', albumId);
-  const album = await apiRequest(`/albums/${albumId}`);
+  const result = await gqlRequest('getAlbum', HASHES.getAlbum, {
+    uri: `spotify:album:${albumId}`,
+    locale: '',
+    offset: 0,
+    limit: 50
+  });
 
+  const album = result.data?.albumUnion;
   if (!album) {
-    console.error('[API] getAlbum returned null/undefined');
+    console.error('[GQL] getAlbum returned null');
     throw new Error('Failed to get album');
   }
 
-  console.log('[API] Album keys:', Object.keys(album));
-  if (album.tracks) {
-      console.log('[API] Album tracks keys:', Object.keys(album.tracks));
-      console.log('[API] Album tracks items type:', Array.isArray(album.tracks.items) ? 'Array' : typeof album.tracks.items);
-  } else {
-      console.error('[API] album.tracks is MISSING!');
-      console.log('[API] Full album dump:', JSON.stringify(album)); // Careful with size
-  }
-
-  const artists = album.artists?.map((artist: any) => ({
-      id: artist.id,
-      name: artist.name,
-      uri: artist.uri,
-      external_urls: artist.external_urls,
-      externalUri: artist.external_urls?.spotify // Compat
-  })) || [];
-
-  const tracks = album.tracks?.items?.map((track: any) => ({
-      id: track.id,
-      name: track.name,
-      uri: track.uri,
-      track_number: track.track_number,
-      duration_ms: track.duration_ms,
-      explicit: track.explicit,
-      artists: track.artists?.map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          uri: a.uri,
-          external_urls: a.external_urls
-      })) || [],
-      external_urls: track.external_urls,
-      externalUri: track.external_urls?.spotify, // Compat
-      album: { 
-          id: album.id,
-          name: album.name,
-          images: album.images
+  const artists = album.artists?.items?.map((artist: any) => {
+      const id = artist.uri?.split(':').pop();
+      return {
+          id,
+          uri: artist.uri,
+          name: artist.profile?.name,
+          external_urls: { spotify: `https://open.spotify.com/artist/${id}` },
+          images: artist.visuals?.avatarImage?.sources || []
       }
-  })) || [];
+  }) || [];
+
+  // Map tracks similar to getAlbumTracks logic
+  const tracksV2 = album.tracksV2?.items || [];
+  const tracks = tracksV2.map((item: any) => {
+      const track = item.track;
+      const trackId = track.uri?.split(':').pop();
+      
+      const trackArtists = track.artists?.items?.map((artist: any) => {
+          const id = artist.uri?.split(':').pop();
+          return {
+              id,
+              uri: artist.uri,
+              name: artist.profile?.name,
+              external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+          };
+      }) || [];
+
+      return {
+          id: trackId,
+          uri: track.uri,
+          name: track.name,
+          duration_ms: track.duration?.totalMilliseconds,
+          explicit: track.contentRating?.label === 'EXPLICIT',
+          artists: trackArtists,
+          album: {
+            id: albumId,
+            name: album.name,
+            images: album.coverArt?.sources || [],
+            external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+          },
+          external_urls: { spotify: `https://open.spotify.com/track/${trackId}` },
+          externalUri: `https://open.spotify.com/track/${trackId}` // Compat
+      };
+  });
 
   return {
-    id: album.id,
+    id: albumId,
     name: album.name,
-    album_type: album.album_type,
+    album_type: album.type?.toLowerCase(),
     label: album.label,
-    release_date: album.release_date,
-    release_date_precision: album.release_date_precision,
-    images: album.images || [],
+    release_date: album.date?.isoString,
+    release_date_precision: album.date?.precision || 'day',
+    images: album.coverArt?.sources || [],
     artists,
-    external_urls: { spotify: `https://open.spotify.com/album/${album.id}` },
-    externalUri: `https://open.spotify.com/album/${album.id}`, // Compat
+    external_urls: { spotify: `https://open.spotify.com/album/${albumId}` },
+    externalUri: `https://open.spotify.com/album/${albumId}`, // Compat
+    copyrights: album.copyrights?.copyright || [],
     tracks: {
         items: tracks,
-        total: album.tracks?.total || 0
+        total: album.tracksV2?.totalCount || 0
     }
   };
 }
 
 export async function getAlbumTracks(albumId: string, offset = 0, limit = 50) {
-  // Use REST API for tracks too purely for consistency/reliability
-  console.log(`[API] getAlbumTracks called for: ${albumId} offset=${offset}`);
-  const data = await apiRequest(`/albums/${albumId}/tracks?offset=${offset}&limit=${limit}`);
+  const result = await gqlRequest('getAlbum', HASHES.getAlbum, {
+    uri: `spotify:album:${albumId}`,
+    locale: '',
+    offset,
+    limit
+  });
 
-  if (!data) {
-     console.error('[API] getAlbumTracks returned null');
-     throw new Error('Failed to get album tracks');
-  }
+  const album = result.data?.albumUnion;
+  if (!album) throw new Error('Failed to get album tracks');
 
-  const tracks = data.items?.map((track: any) => ({
-      id: track.id,
-      name: track.name,
-      uri: track.uri,
-      duration_ms: track.duration_ms,
-      explicit: track.explicit,
-      artists: track.artists?.map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          uri: a.uri,
-          external_urls: a.external_urls,
-          externalUri: a.external_urls?.spotify // Compat
-      })) || [],
-      external_urls: track.external_urls,
-      externalUri: track.external_urls?.spotify, // Compat
-      album: { id: albumId } 
-  })) || [];
+  const tracksV2 = album.tracksV2?.items || [];
+
+  // Construct minimal album object for tracks
+  const trackAlbum = {
+      id: albumId,
+      name: album.name,
+      images: album.coverArt?.sources || [],
+      external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+  };
+
+  const tracks = tracksV2.map((item: any) => {
+      const track = item.track;
+      const trackId = track.uri?.split(':').pop();
+      
+      const trackArtists = track.artists?.items?.map((artist: any) => {
+          const id = artist.uri?.split(':').pop();
+          return {
+              id,
+              uri: artist.uri,
+              name: artist.profile?.name,
+              external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+          };
+      }) || [];
+
+      return {
+          id: trackId,
+          uri: track.uri,
+          name: track.name,
+          duration_ms: track.duration?.totalMilliseconds,
+          explicit: track.contentRating?.label === 'EXPLICIT',
+          artists: trackArtists,
+          album: trackAlbum,
+          external_urls: { spotify: `https://open.spotify.com/track/${trackId}` },
+          externalUri: `https://open.spotify.com/track/${trackId}` // Compat
+      };
+  });
 
   return {
     items: tracks,
-    total: data.total || 0,
-    offset: data.offset || offset,
-    limit: data.limit || limit,
-    next: data.next ? `offset=${offset + limit}` : null
+    total: album.tracksV2?.totalCount || 0,
+    offset,
+    limit,
+    next: tracks.length < limit ? null : `offset=${offset + limit}`
   };
 }
 
@@ -913,7 +989,9 @@ export const SpotifyGqlApi = {
   search: {
     all: searchAll,
     tracks: searchTracks,
-    albums: searchAlbums
+    albums: searchAlbums,
+    artists: searchArtists,
+    playlists: searchPlaylists
   },
   library: {
     checkSavedTracks,

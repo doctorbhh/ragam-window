@@ -1,1 +1,0 @@
-"use strict";const e=require("electron");e.contextBridge.exposeInMainWorld("electron",{login:()=>e.ipcRenderer.invoke("spotify-login"),youtube:{search:r=>e.ipcRenderer.invoke("youtube-search",r),getStream:r=>e.ipcRenderer.invoke("youtube-stream",r)}});

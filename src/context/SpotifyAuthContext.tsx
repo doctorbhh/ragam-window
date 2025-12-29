@@ -17,7 +17,7 @@ interface SpotifyAuthContextType {
   user: { id: string; display_name: string; email?: string; images?: { url: string }[] } | null
   isLoading: boolean
   login: () => Promise<void>
-  loginWithCookie: (spDcCookie: string) => Promise<void>
+  loginWithSpDc: (spDcCookie: string) => Promise<void>
   logout: () => void
   refreshToken: () => Promise<void>
   showSpDcDialog: boolean
@@ -118,7 +118,7 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
   }, [])
 
   // Login with sp_dc cookie
-  const loginWithCookie = useCallback(async (spDcCookie: string) => {
+  const loginWithSpDc = useCallback(async (spDcCookie: string) => {
     setIsLoading(true)
     try {
       // @ts-ignore
@@ -190,7 +190,7 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
         user,
         isLoading,
         login,
-        loginWithCookie,
+        loginWithSpDc,
         logout,
         refreshToken,
         showSpDcDialog,

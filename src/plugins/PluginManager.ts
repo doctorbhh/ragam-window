@@ -33,7 +33,7 @@ class PluginManager {
         // Load all installed plugins
         const installedPlugins = await window.electron.plugins.list()
         for (const manifest of installedPlugins) {
-          await this.loadPlugin(manifest)
+          await this.loadPlugin(manifest as unknown as PluginManifest)
         }
       }
       
@@ -150,7 +150,7 @@ class PluginManager {
       }
 
       if (result.success && result.manifest) {
-        await this.loadPlugin(result.manifest)
+        await this.loadPlugin(result.manifest as unknown as PluginManifest)
         
         // Update settings
         this.settings.installedPlugins[result.manifest.id] = { enabled: true }

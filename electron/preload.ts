@@ -17,8 +17,14 @@ contextBridge.exposeInMainWorld('electron', {
     // Search
     search: (query: string, limit?: number, type?: string) => 
       ipcRenderer.invoke('spotify:search', query, limit, type),
-    searchTracks: (query: string, limit?: number) => 
-      ipcRenderer.invoke('spotify:search-tracks', query, limit),
+    searchTracks: (query: string, offset?: number, limit?: number) => 
+      ipcRenderer.invoke('spotify:search-tracks', query, offset, limit),
+    searchAlbums: (query: string, offset?: number, limit?: number) => 
+      ipcRenderer.invoke('spotify:search-albums', query, offset, limit),
+    searchArtists: (query: string, offset?: number, limit?: number) => 
+      ipcRenderer.invoke('spotify:search-artists', query, offset, limit),
+    searchPlaylists: (query: string, offset?: number, limit?: number) => 
+      ipcRenderer.invoke('spotify:search-playlists', query, offset, limit),
 
     // Metadata
     getTrack: (trackId: string) => ipcRenderer.invoke('spotify:get-track', trackId),

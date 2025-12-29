@@ -137,6 +137,24 @@ export function initSpotifyHandlers() {
     }
   });
 
+  ipcMain.handle('spotify:search-artists', async (_, query: string, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.artists(query, offset, limit);
+    } catch (error: any) {
+      console.error('[SpotifyHandler] search-artists error:', error.message);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('spotify:search-playlists', async (_, query: string, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.playlists(query, offset, limit);
+    } catch (error: any) {
+      console.error('[SpotifyHandler] search-playlists error:', error.message);
+      throw error;
+    }
+  });
+
   // ============ LIBRARY MANAGEMENT ============
 
   ipcMain.handle('spotify:check-saved-tracks', async (_, trackIds: string[]) => {

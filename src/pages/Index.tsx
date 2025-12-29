@@ -4,7 +4,7 @@ import { SongCard } from '@/components/SongCard.tsx'
 import { AIRecommendations } from '@/components/AIRecommendations.tsx'
 import { getHome } from '@/services/spotifyservice'
 import { Music2, Cookie, ExternalLink } from 'lucide-react'
-import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
+import { useSpotifyAuth } from '@/context/SpotifyAuthContext.tsx'
 import { useSpotifyPlaylists } from '@/hooks/useSpotifyPlaylists'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,12 +49,14 @@ const Index = () => {
     if (!spDcValue.trim()) return
     
     setIsLoggingIn(true)
-    const success = await loginWithSpDc(spDcValue.trim())
-    setIsLoggingIn(false)
-    
-    if (success) {
+    try {
+      await loginWithSpDc(spDcValue.trim())
       setShowSpDcDialog(false)
       setSpDcValue('')
+    } catch (error) {
+      console.error('Login failed:', error)
+    } finally {
+      setIsLoggingIn(false)
     }
   }
 

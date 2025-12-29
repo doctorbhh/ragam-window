@@ -67,7 +67,7 @@ export const searchTracks = async (
   limit = 20
 ) => {
   try {
-    return await electron.spotify.searchTracks(query, limit);
+    return await electron.spotify.searchTracks(query, offset, limit);
   } catch (error) {
     console.error("searchTracks IPC error:", error);
     throw error;
@@ -79,14 +79,42 @@ export const searchAlbums = async (
   _token: string,
   query: string,
   offset = 0,
-  limit = 10
+  limit = 20
 ) => {
   try {
-    // Use full search and extract albums
-    const results = await electron.spotify.search(query, limit);
-    return { albums: { items: results.albums || [] } };
+    return await electron.spotify.searchAlbums(query, offset, limit);
   } catch (error) {
     console.error("searchAlbums IPC error:", error);
+    throw error;
+  }
+};
+
+// Search for artists via IPC
+export const searchArtists = async (
+  _token: string,
+  query: string,
+  offset = 0,
+  limit = 20
+) => {
+  try {
+    return await electron.spotify.searchArtists(query, offset, limit);
+  } catch (error) {
+    console.error("searchArtists IPC error:", error);
+    throw error;
+  }
+};
+
+// Search for playlists via IPC
+export const searchPlaylists = async (
+  _token: string,
+  query: string,
+  offset = 0,
+  limit = 20
+) => {
+  try {
+    return await electron.spotify.searchPlaylists(query, offset, limit);
+  } catch (error) {
+    console.error("searchPlaylists IPC error:", error);
     throw error;
   }
 };

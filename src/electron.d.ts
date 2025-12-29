@@ -39,7 +39,10 @@ declare global {
         checkSession: () => Promise<any>
         getStatus: () => Promise<any>
         search: (query: string, limit?: number, type?: string) => Promise<any>
-        searchTracks: (query: string, limit?: number) => Promise<any>
+        searchTracks: (query: string, offset?: number, limit?: number) => Promise<any>
+        searchAlbums: (query: string, offset?: number, limit?: number) => Promise<any>
+        searchArtists: (query: string, offset?: number, limit?: number) => Promise<any>
+        searchPlaylists: (query: string, offset?: number, limit?: number) => Promise<any>
         getTrack: (trackId: string) => Promise<any>
         getTracks: (trackIds: string[]) => Promise<any>
         getAlbum: (albumId: string) => Promise<any>
