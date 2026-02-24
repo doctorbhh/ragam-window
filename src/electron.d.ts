@@ -26,6 +26,24 @@ interface SongPreference {
   savedAt: number
 }
 
+interface LyricsPreference {
+  searchQuery: string
+  syncedLyrics?: string
+  plainLyrics?: string
+  source?: string
+  savedAt: number
+}
+
+interface SavedPlaylist {
+  id: string
+  name: string
+  description?: string
+  imageUrl?: string
+  ownerName?: string
+  trackCount?: number
+  savedAt: number
+}
+
 declare global {
   interface Window {
     electron: {
@@ -35,6 +53,7 @@ declare global {
       spotify: {
         login: (spDcCookie: string) => Promise<any>
         logout: () => Promise<void>
+        isAuthenticated: () => Promise<boolean>
         refreshToken: () => Promise<any>
         checkSession: () => Promise<any>
         getStatus: () => Promise<any>
@@ -48,6 +67,7 @@ declare global {
         getAlbum: (albumId: string) => Promise<any>
         getArtist: (artistId: string) => Promise<any>
         getArtistTopTracks: (artistId: string, market?: string) => Promise<any>
+        getRelatedArtists: (artistId: string) => Promise<{ artists: any[] }>
         getPlaylist: (playlistId: string) => Promise<any>
         getLyrics: (trackId: string) => Promise<any>
         getRecommendations: (seeds: any, limit?: number) => Promise<any>
@@ -74,6 +94,20 @@ declare global {
         getVideo: (
           videoId: string
         ) => Promise<{ url: string; title: string; isHls: boolean } | null>
+        getVideoStream: (
+          videoId: string,
+          maxHeight?: number
+        ) => Promise<{
+          type: 'muxed' | 'dash'
+          url: string
+          title: string
+          isHls: boolean
+          height: number
+          format: string
+          qualities: string[]
+        } | null>
+        onVideoProgress: (callback: (data: any) => void) => void
+        removeVideoProgressListener: () => void
       }
 
       download: {
@@ -106,6 +140,19 @@ declare global {
         clear: () => Promise<boolean>
       }
 
+      lyricsPref: {
+        get: (trackKey: string) => Promise<LyricsPreference | null>
+        set: (trackKey: string, preference: Omit<LyricsPreference, 'savedAt'>) => Promise<boolean>
+        delete: (trackKey: string) => Promise<boolean>
+      }
+
+      savedPlaylists: {
+        getAll: () => Promise<SavedPlaylist[]>
+        add: (playlist: Omit<SavedPlaylist, 'savedAt'>) => Promise<boolean>
+        remove: (playlistId: string) => Promise<boolean>
+        check: (playlistId: string) => Promise<boolean>
+      }
+
       tray: {
         onPlayPause: (callback: () => void) => void
         onNext: (callback: () => void) => void
@@ -113,37 +160,20 @@ declare global {
         removeAllListeners: () => void
       }
 
-      plugins: {
-        list: () => Promise<PluginManifest[]>
-        loadCode: (pluginId: string) => Promise<string>
-        installFromUrl: (url: string) => Promise<{ success: boolean; manifest?: PluginManifest; error?: string }>
-        installFromFile: (data: ArrayBuffer, filename: string) => Promise<{ success: boolean; manifest?: PluginManifest; error?: string }>
-        uninstall: (pluginId: string) => Promise<boolean>
-        getSettings: () => Promise<PluginSettings>
-        saveSettings: (settings: PluginSettings) => Promise<boolean>
+
+      ytmusic: {
+        login: () => Promise<any>
+        logout: () => Promise<any>
+        isAuthenticated: () => Promise<boolean>
+        getPlaylists: () => Promise<any>
+        getPlaylist: (playlistId: string) => Promise<any>
+        getHome: () => Promise<any>
+        search: (query: string) => Promise<any>
+        getSong: (videoId: string) => Promise<any>
+        getWatchPlaylist: (videoId: string, playlistId?: string, radio?: boolean) => Promise<any>
+        getSongRelated: (browseId: string) => Promise<any[]>
       }
     }
   }
 }
 
-interface PluginManifest {
-  id: string
-  name: string
-  version: string
-  author: string
-  description: string
-  type: 'metadata' | 'auth' | 'source' | 'scrobbler' | 'lyrics'
-  entry: string
-  abilities: string[]
-  apis: string[]
-  icon?: string
-  homepage?: string
-  repository?: string
-}
-
-interface PluginSettings {
-  installedPlugins: { [id: string]: { enabled: boolean; settings?: any } }
-  activeMetadataPlugin?: string
-  activeAuthPlugin?: string
-  activeSourcePlugin?: string
-}

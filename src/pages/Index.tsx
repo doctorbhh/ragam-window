@@ -1,30 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Header } from '@/components/Header.tsx'
 import { SongCard } from '@/components/SongCard.tsx'
-import { AIRecommendations } from '@/components/AIRecommendations.tsx'
+
 import { getHome } from '@/services/spotifyservice'
-import { Music2, Cookie, ExternalLink } from 'lucide-react'
+import { Music2, LogOut } from 'lucide-react'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext.tsx'
 import { useSpotifyPlaylists } from '@/hooks/useSpotifyPlaylists'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import SetupScreen from '@/components/SetupScreen'
 
 const Index = () => {
-  const { isAuthenticated, login, loginWithSpDc, user, spotifyToken } = useSpotifyAuth()
+  const {
+    isAuthenticated, login, user, spotifyToken,
+    isYTMusicAuthenticated, ytmusicLogin, ytmusicLogout
+  } = useSpotifyAuth()
   const { playlists, likedSongs } = useSpotifyPlaylists()
   const [greeting, setGreeting] = useState('Good evening')
-  const [showSpDcDialog, setShowSpDcDialog] = useState(false)
-  const [spDcValue, setSpDcValue] = useState('')
-  const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [isYTMusicLoggingIn, setIsYTMusicLoggingIn] = useState(false)
   const [homeSections, setHomeSections] = useState<any[]>([])
+  const [ytmusicHome, setYtmusicHome] = useState<any[]>([])
+  const [ytmusicPlaylists, setYtmusicPlaylists] = useState<any[]>([])
+  const [ytmusicVisibleSections, setYtmusicVisibleSections] = useState(6)
+
+  const anyAuthenticated = isAuthenticated || isYTMusicAuthenticated
 
   useEffect(() => {
     if (isAuthenticated && spotifyToken) {
@@ -33,6 +31,34 @@ const Index = () => {
       }).catch(err => console.error('Failed to load home sections:', err))
     }
   }, [isAuthenticated, spotifyToken])
+
+  const fetchYTMusicHome = useCallback(() => {
+    if (!isYTMusicAuthenticated) return
+    // @ts-ignore
+    window.electron.ytmusic.getHome().then((data: any) => {
+      if (Array.isArray(data)) {
+        setYtmusicHome(data)
+      } else {
+        console.warn('[Index] YTMusic home data not an array:', data)
+        setYtmusicHome([])
+      }
+    }).catch((err: any) => console.error('Failed to load YouTube Music home:', err))
+  }, [isYTMusicAuthenticated])
+
+  useEffect(() => {
+    if (isYTMusicAuthenticated) {
+      fetchYTMusicHome()
+
+      // @ts-ignore
+      window.electron.ytmusic.getPlaylists().then((data: any) => {
+        if (Array.isArray(data)) {
+          setYtmusicPlaylists(data)
+        } else {
+          setYtmusicPlaylists([])
+        }
+      }).catch((err: any) => console.error('Failed to load YouTube Music playlists:', err))
+    }
+  }, [isYTMusicAuthenticated])
 
   useEffect(() => {
     const hour = new Date().getHours()
@@ -45,18 +71,14 @@ const Index = () => {
     }
   }, [])
 
-  const handleSpDcLogin = async () => {
-    if (!spDcValue.trim()) return
-    
-    setIsLoggingIn(true)
+  const handleYTMusicLogin = async () => {
+    setIsYTMusicLoggingIn(true)
     try {
-      await loginWithSpDc(spDcValue.trim())
-      setShowSpDcDialog(false)
-      setSpDcValue('')
+      await ytmusicLogin()
     } catch (error) {
-      console.error('Login failed:', error)
+      console.error('YouTube Music login failed:', error)
     } finally {
-      setIsLoggingIn(false)
+      setIsYTMusicLoggingIn(false)
     }
   }
 
@@ -69,22 +91,23 @@ const Index = () => {
         <div>
           <h1 className="text-3xl font-bold text-foreground mb-2">{greeting}</h1>
           <p className="text-muted-foreground">
-            {isAuthenticated && user?.display_name
+            {anyAuthenticated && user?.display_name
               ? `Welcome back ${user.display_name}! Here's your personalized music experience.`
-              : 'Welcome back! Connect to Spotify to unlock your personalized music experience.'}
+              : anyAuthenticated
+                ? "You're connected! Explore your music library."
+                : 'Welcome back! Connect to Spotify or YouTube Music to unlock your personalized music experience.'}
           </p>
         </div>
 
         {/* AI Recommendations */}
-        {isAuthenticated && <AIRecommendations />}
 
-        {/* Home/Browse Sections */}
+        {/* Spotify Home/Browse Sections */}
         {isAuthenticated && homeSections.map((section: any) => (
           <div key={section.id || section.title} className="space-y-4">
             <h2 className="text-2xl font-bold text-foreground">{section.title}</h2>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
               {section.items.map((item: any) => {
-                if (item.type !== 'playlist') return null // Only show playlists for now
+                if (item.type !== 'playlist') return null
                 return (
                   <SongCard
                     key={item.id}
@@ -98,6 +121,115 @@ const Index = () => {
             </div>
           </div>
         ))}
+
+        {/* YouTube Music Browse Sections */}
+        {isYTMusicAuthenticated && ytmusicHome.length > 0 && (
+          <div className="flex items-center gap-3 mt-2">
+            <h2 className="text-2xl font-bold text-foreground">Browse</h2>
+            <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded">YouTube Music</span>
+            <Button
+              onClick={ytmusicLogout}
+              variant="ghost"
+              size="sm"
+              className="ml-auto text-muted-foreground hover:text-destructive"
+            >
+              <LogOut className="h-4 w-4 mr-1" />
+              Logout YT Music
+            </Button>
+          </div>
+        )}
+
+        {isYTMusicAuthenticated && ytmusicHome.slice(0, ytmusicVisibleSections).map((section: any) => (
+          <div key={section.id} className="space-y-4">
+            <h2 className="text-2xl font-bold text-foreground">
+              {section.title}
+              <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded ml-2">YT Music</span>
+            </h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+              {(section.items || section.contents || []).slice(0, 8).map((item: any, i: number) => {
+
+                // Songs — playable tracks (also pass playlistId if available for Quick Picks)
+                if (item.type === 'song' && item.videoId) {
+                  return (
+                    <SongCard
+                      key={item.videoId || i}
+                      title={item.title}
+                      artist={item.artists?.map((a: any) => a.name).join(', ') || item.subtitle}
+                      imageUrl={item.imageUrl}
+                      playlistId={item.playlistId || undefined}
+                      source={item.playlistId ? 'ytmusic' : undefined}
+                      track={{
+                        id: item.videoId,
+                        name: item.title,
+                        duration_ms: item.durationMs || 0,
+                        uri: `youtube:${item.videoId}`,
+                        artists: item.artists?.length ? item.artists.map((a: any) => ({ id: a.id || '', name: a.name })) : [{ id: '', name: item.subtitle }],
+                        album: {
+                          id: item.album?.id || '',
+                          name: item.album?.name || '',
+                          images: [{ url: item.imageUrl, height: 300, width: 300 }],
+                          artists: item.artists?.length ? item.artists.map((a: any) => ({ id: a.id || '', name: a.name })) : [{ id: '', name: item.subtitle }]
+                        }
+                      }}
+                    />
+                  )
+                }
+
+                // Everything else (playlist, album, artist, unknown) — navigate as playlist
+                const resolvedPlaylistId = item.playlistId || item.browseId?.replace('VL', '') || ''
+                return (
+                  <SongCard
+                    key={resolvedPlaylistId || item.browseId || i}
+                    title={item.title}
+                    artist={item.artists?.map((a: any) => a.name).join(', ') || item.subtitle}
+                    imageUrl={item.imageUrl}
+                    playlistId={resolvedPlaylistId || undefined}
+                    source={resolvedPlaylistId ? 'ytmusic' : undefined}
+                  />
+                )
+              })}
+            </div>
+          </div>
+        ))}
+
+        {/* Show More / Show Less for YT Music Sections */}
+        {isYTMusicAuthenticated && ytmusicHome.length > 6 && (
+          <div className="flex justify-center">
+            <Button
+              onClick={() => setYtmusicVisibleSections(prev => 
+                prev >= ytmusicHome.length ? 6 : Math.min(prev + 6, ytmusicHome.length)
+              )}
+              variant="outline"
+              className="px-8"
+            >
+              {ytmusicVisibleSections >= ytmusicHome.length
+                ? 'Show Less'
+                : `Show More (${ytmusicHome.length - ytmusicVisibleSections} more sections)`}
+            </Button>
+          </div>
+        )}
+
+        {/* YouTube Music User Playlists */}
+        {isYTMusicAuthenticated && ytmusicPlaylists.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold text-foreground">Your YouTube Music Playlists</h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+              {ytmusicPlaylists.slice(0, 8).map((pl: any, i: number) => {
+                const resolvedId = pl.playlistId || pl.browseId?.replace('VL', '') || pl.id || ''
+                return (
+                <SongCard
+                  key={resolvedId || i}
+                  title={pl.title || ''}
+                  artist={pl.description || pl.subtitle || ''}
+                  imageUrl={pl.imageUrl || ''}
+                  playlistId={resolvedId || undefined}
+                  source="ytmusic"
+                />
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Liked Songs Preview */}
         {isAuthenticated && likedSongs.length > 0 && (
@@ -123,7 +255,7 @@ const Index = () => {
         {/* Playlists Preview */}
         <div className="space-y-4">
           <h2 className="text-2xl font-bold text-foreground">
-            {isAuthenticated ? 'Your Playlists' : 'Connect to Spotify'}
+            {isAuthenticated ? 'Your Playlists' : ''}
           </h2>
 
           {isAuthenticated ? (
@@ -138,90 +270,15 @@ const Index = () => {
                 />
               ))}
             </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-16 px-4 rounded-lg bg-card/60 backdrop-blur border border-border/50">
-              <Music2 className="h-16 w-16 text-muted-foreground mb-4" />
-              <h3 className="text-xl font-semibold text-foreground mb-2">Your music awaits</h3>
-              <p className="text-sm text-muted-foreground mb-6 text-center max-w-md">
-                Connect your Spotify account to see your playlists, recently played tracks, and get
-                personalized recommendations.
-              </p>
-              <div className="flex flex-col gap-3 items-center">
-                <Button
-                  onClick={login}
-                  size="lg"
-                  className="bg-[#1DB954] hover:bg-[#1DB954]/90 text-white font-bold"
-                >
-                  Connect with Spotify
-                </Button>
-                <span className="text-xs text-muted-foreground">or</span>
-                <Button
-                  onClick={() => setShowSpDcDialog(true)}
-                  variant="outline"
-                  size="sm"
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <Cookie className="h-4 w-4 mr-2" />
-                  Login with Cookie (No Rate Limits)
-                </Button>
-                <p className="text-xs text-muted-foreground text-center max-w-xs">
-                  Use sp_dc cookie from your browser if you get rate limit errors
-                </p>
-              </div>
-            </div>
-          )}
+          ) : !anyAuthenticated ? (
+            <SetupScreen 
+              onSpotifyLogin={login} 
+              onYTMusicLogin={handleYTMusicLogin} 
+              isYTMusicLoggingIn={isYTMusicLoggingIn} 
+            />
+          ) : null}
         </div>
       </div>
-
-      {/* sp_dc Cookie Input Dialog */}
-      <Dialog open={showSpDcDialog} onOpenChange={setShowSpDcDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Cookie className="h-5 w-5" />
-              Login with sp_dc Cookie
-            </DialogTitle>
-            <DialogDescription className="text-left space-y-2">
-              <p>This method avoids Spotify's rate limits.</p>
-              <div className="bg-muted/50 rounded-lg p-3 text-sm space-y-1">
-                <p className="font-medium">How to get your sp_dc cookie:</p>
-                <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>Open <span className="font-mono text-xs">open.spotify.com</span> in your browser</li>
-                  <li>Login to Spotify</li>
-                  <li>Press <kbd className="px-1 py-0.5 bg-background rounded text-xs">F12</kbd> → Application → Cookies</li>
-                  <li>Find <span className="font-mono text-xs">sp_dc</span> and copy its value</li>
-                </ol>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4">
-            <Input
-              placeholder="Paste your sp_dc cookie value here..."
-              value={spDcValue}
-              onChange={(e) => setSpDcValue(e.target.value)}
-              className="font-mono text-sm"
-              onKeyDown={(e) => e.key === 'Enter' && handleSpDcLogin()}
-            />
-          </div>
-          <DialogFooter className="flex-col sm:flex-row gap-2">
-            <Button
-              variant="outline"
-              onClick={() => window.open('https://open.spotify.com', '_blank')}
-              className="sm:flex-1"
-            >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open Spotify
-            </Button>
-            <Button
-              onClick={handleSpDcLogin}
-              disabled={!spDcValue.trim() || isLoggingIn}
-              className="bg-[#1DB954] hover:bg-[#1DB954]/90 text-white sm:flex-1"
-            >
-              {isLoggingIn ? 'Logging in...' : 'Login'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

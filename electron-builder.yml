@@ -1,8 +1,10 @@
-appId: com.electron.app
-productName: my-spotify-electron
+appId: com.ragam.app
+productName: Ragam
 directories:
   buildResources: build
 files:
+  - 'dist-electron/**/*'
+  - 'dist/**/*'
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
@@ -11,13 +13,23 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: bin
+    to: bin
+    filter:
+      - '**/*'
 win:
-  executableName: my-spotify-electron
+  executableName: Ragam
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

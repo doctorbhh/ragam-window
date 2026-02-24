@@ -14,6 +14,7 @@ interface SongCardProps {
   onClick?: () => void
   playlistId?: string
   track?: SpotifyTrack
+  source?: 'spotify' | 'ytmusic'
 }
 
 export function SongCard({
@@ -24,7 +25,8 @@ export function SongCard({
   className,
   onClick,
   playlistId,
-  track
+  track,
+  source
 }: SongCardProps) {
   const navigate = useNavigate()
   const { playTrack } = usePlayer()
@@ -33,7 +35,10 @@ export function SongCard({
     if (onClick) {
       onClick()
     } else if (playlistId) {
-      navigate(`/playlist/${playlistId}`)
+      const path = source === 'ytmusic'
+        ? `/playlist/${playlistId}?source=ytmusic`
+        : `/playlist/${playlistId}`
+      navigate(path)
     }
   }
 
@@ -57,6 +62,9 @@ export function SongCard({
           <img
             src={imageUrl}
             alt={title}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         </div>

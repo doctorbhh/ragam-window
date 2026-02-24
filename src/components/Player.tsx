@@ -18,7 +18,10 @@ import {
   ListVideo,
   Settings,
   Star,
-  Check
+  Search,
+  Save,
+  Check,
+  Eye
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
@@ -45,6 +48,13 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
   // Video State
   const [videoAlternatives, setVideoAlternatives] = useState<any[]>([])
   const [currentVideoId, setCurrentVideoId] = useState<string | null>(null)
+  
+  // Download Progress State
+  const [downloadProgress, setDownloadProgress] = useState<{
+    status: 'idle' | 'downloading' | 'complete' | 'error'
+    progress?: number
+    message?: string
+  }>({ status: 'idle' })
 
   // HLS State
   const [levels, setLevels] = useState<any[]>([])
@@ -52,6 +62,18 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
 
   // Cleanup function - runs when modal closes
   useEffect(() => {
+    // Subscribe to download progress events
+    // @ts-ignore
+    window.electron.youtube.onVideoProgress((data: any) => {
+      if (data.videoId === currentVideoId) {
+        setDownloadProgress({
+          status: data.status,
+          progress: data.progress,
+          message: data.message
+        })
+      }
+    })
+    
     return () => {
       console.log('[VideoModal] Cleanup - stopping video and HLS')
       // Stop video playback
@@ -65,8 +87,11 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      // Remove progress listener
+      // @ts-ignore
+      window.electron.youtube.removeVideoProgressListener()
     }
-  }, [])
+  }, [currentVideoId])
 
   // Initial Search (Finds top 5 videos)
   useEffect(() => {
@@ -94,45 +119,40 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
     searchAndPlay()
   }, [trackName, artistName])
 
-  // 2. Load Specific Stream (Helper Function)
-  const loadVideoStream = async (videoId: string) => {
+  // 2. Load Specific Stream (Helper Function) - Uses muxed MP4 to avoid 403 errors
+  const loadVideoStream = async (videoId: string, maxHeight = 720) => {
     // Cleanup previous HLS if exists
     if (hlsRef.current) {
       hlsRef.current.destroy()
       hlsRef.current = null
     }
-    setLevels([])
     setLoading(true)
     setCurrentVideoId(videoId)
 
     try {
+      // Use the new muxed MP4 API to avoid 403 errors from HLS segments
       // @ts-ignore
-      const streamData = await window.electron.youtube.getVideo(videoId)
+      const streamData = await window.electron.youtube.getVideoStream(videoId, maxHeight)
 
       if (!streamData || !streamData.url) throw new Error('Stream extraction failed')
 
       const video = videoRef.current
       if (!video) return
 
-      if (streamData.isHls) {
-        if (Hls.isSupported()) {
-          const hls = new Hls()
-          hls.loadSource(streamData.url)
-          hls.attachMedia(video)
-
-          hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-            setLevels(data.levels)
-            hlsRef.current = hls
-            video.play().catch((e) => console.error('Autoplay blocked', e))
-          })
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = streamData.url
-          video.addEventListener('loadedmetadata', () => video.play())
-        }
-      } else {
-        video.src = streamData.url
-        video.play()
+      // Store available qualities for the quality selector
+      if (streamData.qualities && streamData.qualities.length > 0) {
+        const qualityLevels = streamData.qualities.map((q: string) => ({ 
+          height: parseInt(q.replace('p', '')) 
+        }))
+        setLevels(qualityLevels)
+        setCurrentLevel(streamData.height || parseInt(streamData.qualities[0].replace('p', '')))
       }
+
+      // For muxed MP4 streams, just set the source directly - no HLS needed
+      console.log('[VideoModal] Playing muxed stream:', streamData.height + 'p')
+      video.src = streamData.url
+      video.play().catch((e) => console.error('Autoplay blocked', e))
+      
       setError(null)
     } catch (err) {
       console.error('Stream Error:', err)
@@ -142,10 +162,41 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
     }
   }
 
-  const changeQuality = (levelIndex: number) => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = levelIndex
-      setCurrentLevel(levelIndex)
+  // Switch video quality - reloads stream with new quality
+  const changeQuality = async (height: number) => {
+    if (!currentVideoId) return
+    const video = videoRef.current
+    if (!video) return
+    
+    // Remember current playback position
+    const currentTime = video.currentTime
+    const wasPlaying = !video.paused
+    
+    console.log(`[VideoModal] Switching quality to ${height}p`)
+    setLoading(true)
+    
+    try {
+      // Get new stream URL with selected quality
+      // @ts-ignore
+      const streamData = await window.electron.youtube.getVideoStream(currentVideoId, height)
+      
+      if (streamData?.url) {
+        video.src = streamData.url
+        
+        // Wait for video to load metadata before seeking
+        video.onloadedmetadata = () => {
+          video.currentTime = currentTime
+          if (wasPlaying) {
+            video.play().catch((e) => console.error('Play failed', e))
+          }
+        }
+        
+        setCurrentLevel(height)
+      }
+    } catch (err) {
+      console.error('Quality change error:', err)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -161,6 +212,28 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
       className="fixed inset-0 w-screen h-screen bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center animate-in fade-in duration-300"
       style={{ zIndex: 2147483647 }}
     >
+      {/* DOWNLOAD PROGRESS OVERLAY */}
+      {downloadProgress.status === 'downloading' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-50">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-16 h-16 border-4 border-white/20 border-t-primary rounded-full animate-spin" />
+            <p className="text-white text-lg font-medium">
+              {downloadProgress.progress 
+                ? `Downloading: ${downloadProgress.progress.toFixed(0)}%` 
+                : 'Preparing high-quality video...'}
+            </p>
+            <p className="text-white/60 text-sm">This may take a moment for 1080p quality</p>
+            {downloadProgress.progress && (
+              <div className="w-64 h-2 bg-white/10 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${downloadProgress.progress}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* CONTROLS OVERLAY */}
       <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
         {/* --- VIDEO SOURCE SELECTOR (TOP 5) --- */}
@@ -229,23 +302,18 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
               style={{ zIndex: 2147483650 }}
             >
               <div className="flex flex-col max-h-64 overflow-y-auto custom-scrollbar">
-                <button
-                  onClick={() => changeQuality(-1)}
-                  className={`text-left px-3 py-2 text-sm rounded-lg hover:bg-white/10 transition-colors ${currentLevel === -1 ? 'text-primary font-bold bg-white/5' : ''}`}
-                >
-                  Auto
-                </button>
+                <div className="px-3 py-1 text-xs text-white/50 border-b border-white/10 mb-1">Quality</div>
                 {levels
-                  .map((level, index) => (
+                  .sort((a, b) => b.height - a.height)
+                  .map((level) => (
                     <button
-                      key={index}
-                      onClick={() => changeQuality(index)}
-                      className={`text-left px-3 py-2 text-sm rounded-lg hover:bg-white/10 transition-colors ${currentLevel === index ? 'text-primary font-bold bg-white/5' : ''}`}
+                      key={level.height}
+                      onClick={() => changeQuality(level.height)}
+                      className={`text-left px-3 py-2 text-sm rounded-lg hover:bg-white/10 transition-colors ${currentLevel === level.height ? 'text-primary font-bold bg-white/5' : ''}`}
                     >
-                      {level.height}p
+                      {level.height}p {currentLevel === level.height && '✓'}
                     </button>
-                  ))
-                  .reverse()}
+                  ))}
               </div>
             </PopoverContent>
           </Popover>
@@ -326,42 +394,22 @@ export function Player() {
   const [localVolume, setLocalVolume] = useState([volume * 100])
   const [isVideoOpen, setIsVideoOpen] = useState(false)
 
-  // --- KEYBOARD SHORTCUTS ---
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-        return
 
-      switch (e.code) {
-        case 'Space':
-          e.preventDefault()
-          togglePlayPause()
-          break
-        case 'ArrowUp':
-          e.preventDefault()
-          setPlayerVolume(Math.min(1, volume + 0.1))
-          break
-        case 'ArrowDown':
-          e.preventDefault()
-          setPlayerVolume(Math.max(0, volume - 0.1))
-          break
-        case 'ArrowLeft':
-          previousTrack()
-          break
-        case 'ArrowRight':
-          nextTrack()
-          break
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [togglePlayPause, volume, setPlayerVolume, previousTrack, nextTrack])
 
   // --- LYRICS STATE ---
   interface LyricLine {
     time: number
     text: string
+  }
+  interface LyricsSearchResult {
+    id: number
+    name: string
+    trackName: string
+    artistName: string
+    albumName?: string
+    duration: number
+    syncedLyrics?: string
+    plainLyrics?: string
   }
   const [syncedLyrics, setSyncedLyrics] = useState<LyricLine[]>([])
   const [plainLyrics, setPlainLyrics] = useState('')
@@ -369,6 +417,15 @@ export function Player() {
   const [loadingLyrics, setLoadingLyrics] = useState(false)
   const activeLyricRef = useRef<HTMLParagraphElement>(null)
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
+  
+  // --- LYRICS SEARCH STATE ---
+  const [lyricsSearchQuery, setLyricsSearchQuery] = useState('')
+  const [lyricsSearchResults, setLyricsSearchResults] = useState<LyricsSearchResult[]>([])
+  const [searchingLyrics, setSearchingLyrics] = useState(false)
+  const [showLyricsSearch, setShowLyricsSearch] = useState(false)
+  const [savedLyricsQuery, setSavedLyricsQuery] = useState<string | null>(null)
+  const [previewLyrics, setPreviewLyrics] = useState<LyricsSearchResult | null>(null)
+  const [lyricsSheetOpen, setLyricsSheetOpen] = useState(false)
   
   // Album colors for gradient and text
   const [albumColor, setAlbumColor] = useState('rgb(20, 20, 20)')
@@ -429,11 +486,24 @@ export function Player() {
     }
   }, [currentTrack?.album?.images])
 
+  // Clear lyrics and auto-fetch when track changes (if lyrics sheet is open)
   useEffect(() => {
     setSyncedLyrics([])
     setPlainLyrics('')
     setCurrentLyricIndex(-1)
-  }, [currentTrack])
+    setSavedLyricsQuery(null)
+    setShowLyricsSearch(false)
+    setLyricsSearchResults([])
+    
+    // Auto-fetch if lyrics sheet is open
+    if (lyricsSheetOpen && currentTrack) {
+      // Small delay to ensure state is cleared
+      const timer = setTimeout(() => {
+        fetchLyrics()
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [currentTrack?.id])
   useEffect(() => {
     setLocalProgress([duration > 0 ? (progress / duration) * 100 : 0])
   }, [progress, duration])
@@ -485,6 +555,41 @@ export function Player() {
     }
   }
 
+  // --- KEYBOARD SHORTCUTS ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        return
+
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault()
+          togglePlayPause()
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          setPlayerVolume(Math.min(1, volume + 0.1))
+          break
+        case 'ArrowDown':
+          e.preventDefault()
+          setPlayerVolume(Math.max(0, volume - 0.1))
+          break
+        case 'ArrowLeft':
+          previousTrack()
+          break
+        case 'ArrowRight':
+          nextTrack()
+          break
+        case 'KeyM':
+          toggleMute()
+          break
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [togglePlayPause, volume, setPlayerVolume, previousTrack, nextTrack, toggleMute])
+
   const parseLRC = (lrcString: string) => {
     const lines = lrcString.split('\n')
     const result: LyricLine[] = []
@@ -505,11 +610,38 @@ export function Player() {
 
   const fetchLyrics = async () => {
     if (!currentTrack) return
-    if (syncedLyrics.length > 0 || plainLyrics) return
+    // Don't return early if lyrics exist - allow re-fetching for new track
+    // The caller should clear lyrics before calling this if needed
+    if (loadingLyrics) return // Prevent duplicate fetches
     setLoadingLyrics(true)
+    
+    // Initialize search query with current track info
+    const artistName = currentTrack.artists?.[0]?.name || ''
+    const defaultQuery = `${currentTrack.name} ${artistName}`
+    setLyricsSearchQuery(defaultQuery)
+    
+    // Create track key for preference lookup
+    const allArtists = currentTrack.artists?.map((a: any) => a.name).join('_') || ''
+    const trackKey = `${currentTrack.name}_${allArtists}`.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 100)
+    
     try {
+      // Check for saved lyrics preference first
+      const savedPref = await window.electron.lyricsPref.get(trackKey)
+      if (savedPref) {
+        console.log('[Lyrics] Using saved preference:', savedPref.searchQuery)
+        setSavedLyricsQuery(savedPref.searchQuery)
+        if (savedPref.syncedLyrics) {
+          setSyncedLyrics(parseLRC(savedPref.syncedLyrics))
+        } else if (savedPref.plainLyrics) {
+          setPlainLyrics(savedPref.plainLyrics)
+        }
+        setLoadingLyrics(false)
+        return
+      }
+      
+      // No saved preference, fetch from LRCLIB
       const res = await fetch(
-        `https://lrclib.net/api/get?artist_name=${encodeURIComponent(currentTrack.artists?.[0]?.name || '')}&track_name=${encodeURIComponent(currentTrack.name)}`
+        `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artistName)}&track_name=${encodeURIComponent(currentTrack.name)}`
       )
       if (!res.ok) throw new Error('Lyrics not found')
       const data = await res.json()
@@ -522,6 +654,95 @@ export function Player() {
       setLoadingLyrics(false)
     }
   }
+
+  // Search LRCLIB for lyrics with custom query
+  const searchLyrics = async () => {
+    if (!lyricsSearchQuery.trim()) return
+    setSearchingLyrics(true)
+    setLyricsSearchResults([])
+    
+    try {
+      const res = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(lyricsSearchQuery.trim())}`
+      )
+      if (!res.ok) throw new Error('Search failed')
+      const results = await res.json()
+      setLyricsSearchResults(results.slice(0, 10)) // Limit to 10 results
+    } catch (e) {
+      console.error('Lyrics search failed:', e)
+      setLyricsSearchResults([])
+    } finally {
+      setSearchingLyrics(false)
+    }
+  }
+
+  // Apply selected lyrics result
+  const selectLyrics = (result: LyricsSearchResult) => {
+    if (result.syncedLyrics) {
+      setSyncedLyrics(parseLRC(result.syncedLyrics))
+      setPlainLyrics('')
+    } else if (result.plainLyrics) {
+      setPlainLyrics(result.plainLyrics)
+      setSyncedLyrics([])
+    }
+    setShowLyricsSearch(false)
+    setLyricsSearchResults([])
+  }
+
+  // Save lyrics preference for current track
+  const saveLyricsPreference = async (result: LyricsSearchResult) => {
+    if (!currentTrack) return
+    
+    const allArtists = currentTrack.artists?.map((a: any) => a.name).join('_') || ''
+    const trackKey = `${currentTrack.name}_${allArtists}`.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 100)
+    
+    try {
+      await window.electron.lyricsPref.set(trackKey, {
+        searchQuery: lyricsSearchQuery,
+        syncedLyrics: result.syncedLyrics,
+        plainLyrics: result.plainLyrics,
+        source: 'LRCLIB manual search'
+      })
+      setSavedLyricsQuery(lyricsSearchQuery)
+      selectLyrics(result)
+      console.log('[Lyrics] Saved preference for:', trackKey)
+    } catch (e) {
+      console.error('Failed to save lyrics preference:', e)
+    }
+  }
+
+  // Clear saved lyrics preference
+  const clearLyricsPreference = async () => {
+    if (!currentTrack) return
+    
+    const allArtists = currentTrack.artists?.map((a: any) => a.name).join('_') || ''
+    const trackKey = `${currentTrack.name}_${allArtists}`.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 100)
+    
+    try {
+      await window.electron.lyricsPref.delete(trackKey)
+      setSavedLyricsQuery(null)
+      // Clear current lyrics and refetch
+      setSyncedLyrics([])
+      setPlainLyrics('')
+      setLoadingLyrics(true)
+      
+      const artistName = currentTrack.artists?.[0]?.name || ''
+      const res = await fetch(
+        `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artistName)}&track_name=${encodeURIComponent(currentTrack.name)}`
+      )
+      if (res.ok) {
+        const data = await res.json()
+        if (data.syncedLyrics) setSyncedLyrics(parseLRC(data.syncedLyrics))
+        else if (data.plainLyrics) setPlainLyrics(data.plainLyrics)
+        else setPlainLyrics('No lyrics found.')
+      }
+    } catch (e) {
+      console.error('Failed to clear lyrics preference:', e)
+    } finally {
+      setLoadingLyrics(false)
+    }
+  }
+
 
   const formatTime = (seconds: number) => {
     if (isNaN(seconds)) return '0:00'
@@ -542,7 +763,7 @@ export function Player() {
 
       {/* --- FLOATING PLAYER CONTAINER --- */}
       <div className="fixed bottom-0 sm:bottom-4 left-0 right-0 sm:left-4 sm:right-4 z-50 flex justify-center">
-        <div className="w-full max-w-screen-xl bg-background/80 sm:bg-black/60 backdrop-blur-xl border-t sm:border border-white/5 sm:rounded-2xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300 relative group/player">
+        <div className="player-glow w-full max-w-screen-xl bg-background/80 sm:bg-black/60 backdrop-blur-xl border-t sm:border border-white/5 sm:rounded-2xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300 relative group/player">
           {/* Progress Bar - Enlarges on Hover */}
           <div
             className="w-full h-1 hover:h-3 bg-white/10 cursor-pointer group transition-all duration-200 ease-out z-20 absolute top-0 left-0 right-0"
@@ -796,25 +1017,31 @@ export function Player() {
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded-full transition-colors"
+                  className="h-8 w-8 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded-full transition-colors disabled:opacity-50"
                   onClick={() => {
                     setIsVideoOpen(true)
                     if (isPlaying) togglePlayPause()
                   }}
-                  title="Watch Video"
+                  title={isLoading ? "Please wait for audio to load" : "Watch Video"}
+                  disabled={isLoading}
                 >
                   <MonitorPlay className="h-4 w-4" />
                 </Button>
               )}
 
               {/* Lyrics */}
-              <Sheet>
+              <Sheet 
+                open={lyricsSheetOpen} 
+                onOpenChange={(open) => {
+                  setLyricsSheetOpen(open)
+                  if (open) fetchLyrics()
+                }}
+              >
                 <SheetTrigger asChild>
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full"
-                    onClick={fetchLyrics}
                     disabled={!currentTrack}
                   >
                     <Mic2 className="h-4 w-4" />
@@ -851,7 +1078,219 @@ export function Player() {
                         <p className="text-sm text-white/60 mt-1 truncate">
                           {currentTrack?.artists?.map((a: any) => a.name).join(', ')}
                         </p>
+                        
+                        {/* Player Controls in Lyrics Panel */}
+                        <div className="mt-6 flex flex-col items-center gap-4 w-full">
+                          {/* Control Buttons */}
+                          <div className="flex items-center gap-4">
+                            <button
+                              onClick={previousTrack}
+                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                            >
+                              <SkipBack className="h-5 w-5" />
+                            </button>
+                            <button
+                              onClick={togglePlayPause}
+                              className="p-3 rounded-full bg-white text-black hover:scale-105 transition-transform"
+                            >
+                              {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 ml-0.5" />}
+                            </button>
+                            <button
+                              onClick={nextTrack}
+                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                            >
+                              <SkipForward className="h-5 w-5" />
+                            </button>
+                          </div>
+                          
+                          {/* Progress Bar */}
+                          <div className="w-full flex items-center gap-2">
+                            <span className="text-[10px] text-white/50 w-8 text-right">{formatTime(progress)}</span>
+                            <Slider
+                              value={localProgress}
+                              max={100}
+                              step={0.1}
+                              onValueChange={(value) => {
+                                setLocalProgress(value)
+                                const newTime = (value[0] / 100) * duration
+                                seekTo(newTime)
+                              }}
+                              className="flex-1"
+                            />
+                            <span className="text-[10px] text-white/50 w-8">{formatTime(duration)}</span>
+                          </div>
+                        </div>
+                        
+                        {/* Saved Lyrics Indicator */}
+                        {savedLyricsQuery && (
+                          <div className="mt-4 flex items-center justify-center gap-2">
+                            <span className="text-[10px] bg-primary/20 text-primary px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <Save className="h-3 w-3" /> Saved Lyrics
+                            </span>
+                            <button
+                              onClick={clearLyricsPreference}
+                              className="text-[10px] text-white/40 hover:text-white/60 underline"
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        )}
                       </div>
+
+                      {/* Full Lyrics Preview Modal */}
+                      {previewLyrics && (
+                        <div 
+                          className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
+                          onClick={() => setPreviewLyrics(null)}
+                        >
+                          <div 
+                            className="bg-zinc-900 border border-white/10 rounded-2xl max-w-lg w-full max-h-[80vh] flex flex-col shadow-2xl"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {/* Header */}
+                            <div className="p-4 border-b border-white/10 flex items-start justify-between gap-4">
+                              <div className="min-w-0">
+                                <h3 className="text-lg font-semibold text-white truncate">{previewLyrics.trackName}</h3>
+                                <p className="text-sm text-white/50 truncate">
+                                  {previewLyrics.artistName} {previewLyrics.albumName && `• ${previewLyrics.albumName}`}
+                                </p>
+                                {previewLyrics.syncedLyrics && (
+                                  <span className="inline-block mt-1 text-[10px] bg-primary/20 text-primary px-2 py-0.5 rounded">Synced Lyrics</span>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => setPreviewLyrics(null)}
+                                className="p-2 rounded-full text-white/40 hover:text-white hover:bg-white/10 shrink-0"
+                              >
+                                <X className="h-5 w-5" />
+                              </button>
+                            </div>
+
+                            {/* Lyrics Content */}
+                            <div className="flex-1 overflow-y-auto p-4">
+                              <pre className="text-sm text-white/70 whitespace-pre-wrap font-sans leading-relaxed">
+                                {(previewLyrics.syncedLyrics || previewLyrics.plainLyrics || 'No lyrics available')
+                                  .split('\n')
+                                  .map(line => line.replace(/\[\d{2}:\d{2}\.\d{2,3}\]/g, '').trim())
+                                  .filter(line => line.length > 0)
+                                  .join('\n')}
+                              </pre>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="p-4 border-t border-white/10 flex gap-2">
+                              <button
+                                onClick={() => { selectLyrics(previewLyrics); setPreviewLyrics(null) }}
+                                className="flex-1 py-2 px-4 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm font-medium transition-colors"
+                              >
+                                Use These Lyrics
+                              </button>
+                              <button
+                                onClick={() => { saveLyricsPreference(previewLyrics); setPreviewLyrics(null) }}
+                                className="flex-1 py-2 px-4 bg-primary hover:bg-primary/80 text-primary-foreground rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                              >
+                                <Save className="h-4 w-4" /> Save & Use
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lyrics Search Toggle */}
+                      <button
+                        onClick={() => setShowLyricsSearch(!showLyricsSearch)}
+                        className="mt-6 flex items-center gap-2 text-sm text-white/50 hover:text-white/80 transition-colors"
+                      >
+                        <Search className="h-4 w-4" />
+                        {showLyricsSearch ? 'Hide Search' : 'Search Different Lyrics'}
+                      </button>
+
+                      {/* Lyrics Search Panel */}
+                      {showLyricsSearch && (
+                        <div className="mt-4 w-full max-w-[320px] space-y-3">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={lyricsSearchQuery}
+                              onChange={(e) => setLyricsSearchQuery(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && searchLyrics()}
+                              placeholder="Search lyrics..."
+                              className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm placeholder:text-white/40 focus:outline-none focus:border-primary"
+                            />
+                            <button
+                              onClick={searchLyrics}
+                              disabled={searchingLyrics}
+                              className="px-4 py-2 bg-primary hover:bg-primary/80 text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50"
+                            >
+                              {searchingLyrics ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
+                            </button>
+                          </div>
+
+                          {/* Search Results */}
+                          {lyricsSearchResults.length > 0 && (
+                            <div className="max-h-64 overflow-y-auto space-y-2 bg-black/30 rounded-lg p-2">
+                              {lyricsSearchResults.map((result) => {
+                                // Get preview of lyrics (first 2-3 lines)
+                                const lyricsText = result.syncedLyrics || result.plainLyrics || ''
+                                const lines = lyricsText
+                                  .split('\n')
+                                  .map(line => line.replace(/\[\d{2}:\d{2}\.\d{2,3}\]/g, '').trim()) // Remove LRC timestamps
+                                  .filter(line => line.length > 0)
+                                  .slice(0, 2)
+                                const preview = lines.join(' • ')
+                                
+                                return (
+                                  <div
+                                    key={result.id}
+                                    className="p-3 rounded-lg hover:bg-white/10 cursor-pointer group border border-white/5 hover:border-white/20 transition-all"
+                                  >
+                                    <div 
+                                      className="flex-1"
+                                      onClick={() => selectLyrics(result)}
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-sm text-white font-medium truncate">{result.trackName}</p>
+                                          <p className="text-[11px] text-white/50 truncate">
+                                            {result.artistName} {result.albumName && `• ${result.albumName}`}
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          {result.syncedLyrics && (
+                                            <span className="text-[9px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium">
+                                              Synced
+                                            </span>
+                                          )}
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); setPreviewLyrics(result) }}
+                                            className="p-1.5 rounded-full text-white/40 hover:text-blue-400 hover:bg-blue-500/20 opacity-0 group-hover:opacity-100 transition-all"
+                                            title="Preview full lyrics"
+                                          >
+                                            <Eye className="h-4 w-4" />
+                                          </button>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); saveLyricsPreference(result) }}
+                                            className="p-1.5 rounded-full text-white/40 hover:text-primary hover:bg-primary/20 opacity-0 group-hover:opacity-100 transition-all"
+                                            title="Save as preferred lyrics"
+                                          >
+                                            <Save className="h-4 w-4" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                      {/* Lyrics Preview */}
+                                      {preview && (
+                                        <p className="mt-2 text-[11px] text-white/40 italic line-clamp-2 bg-white/5 rounded px-2 py-1.5">
+                                          "{preview}"
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Right Side - Lyrics */}

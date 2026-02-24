@@ -1,20 +1,33 @@
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/components/ui/use-toast";
 
 export function useSpotifyData() {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
+  // Helper to safely call Electron IPC
+  const safeIpcCall = async (method: string, ...args: any[]) => {
+    try {
+      // @ts-ignore
+      if (window.electron && window.electron.spotify && typeof window.electron.spotify[method] === 'function') {
+        // @ts-ignore
+        return await window.electron.spotify[method](...args);
+      }
+      console.warn(`Electron IPC method ${method} not available`);
+      return null;
+    } catch (error) {
+      console.error(`Error calling ${method}:`, error);
+      throw error;
+    }
+  };
+
   const fetchRecentlyPlayed = async (userId: string) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.functions.invoke('spotify-data', {
-        body: { action: 'fetch_recently_played', userId },
-      });
-
-      if (error) throw error;
-      return data.data.recently_played;
+      // Use getRecentlyPlayed from Electron
+      // Note: userId arg is ignored as the backend uses the authenticated session
+      const data = await safeIpcCall('getRecentlyPlayed', 50); 
+      return data?.items || [];
     } catch (error) {
       console.error('Error fetching recently played:', error);
       toast({
@@ -31,12 +44,9 @@ export function useSpotifyData() {
   const fetchLikedSongs = async (userId: string) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.functions.invoke('spotify-data', {
-        body: { action: 'fetch_liked_songs', userId },
-      });
-
-      if (error) throw error;
-      return data.data.liked_songs;
+      // Use getSavedTracks from Electron
+      const data = await safeIpcCall('getSavedTracks', 50);
+      return data?.items || [];
     } catch (error) {
       console.error('Error fetching liked songs:', error);
       toast({
@@ -53,12 +63,9 @@ export function useSpotifyData() {
   const fetchPlaylists = async (userId: string) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.functions.invoke('spotify-data', {
-        body: { action: 'fetch_playlists', userId },
-      });
-
-      if (error) throw error;
-      return data.data.playlists;
+      // Use getMyPlaylists from Electron
+      const data = await safeIpcCall('getMyPlaylists', 50);
+      return data?.items || [];
     } catch (error) {
       console.error('Error fetching playlists:', error);
       toast({
@@ -75,18 +82,24 @@ export function useSpotifyData() {
   const getAIRecommendations = async (userId: string) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.functions.invoke('ai-recommendations', {
-        body: { userId },
-      });
+      // Use getRecommendations from Electron
+      // Note: This requires seeds. For now, let's use a default or empty object if not provided
+      // The original code passed userId, but getRecommendations needs seeds.
+      // We might need to fetch some top tracks to use as seeds.
+      
+      const topTracks = await safeIpcCall('getTopTracks', 'short_term', 5);
+      const seedTracks = topTracks?.items?.map((t: any) => t.id).slice(0, 5) || [];
+      
+      const data = await safeIpcCall('getRecommendations', { seed_tracks: seedTracks });
 
-      if (error) throw error;
+      if (!data) throw new Error("No data returned");
       
       toast({
         title: "Success",
         description: "AI recommendations generated successfully!",
       });
       
-      return data.recommendations;
+      return data;
     } catch (error) {
       console.error('Error getting AI recommendations:', error);
       toast({

@@ -49,10 +49,18 @@ async function gqlRequest(operationName: string, hash: string, variables: any = 
       url: GQL_ENDPOINT,
     });
 
+    // Browser spoofing headers - Critical for avoiding 429s
+    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     request.setHeader('Authorization', `Bearer ${accessToken}`);
     request.setHeader('Content-Type', 'application/json');
     request.setHeader('Accept', 'application/json');
-    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    request.setHeader('Origin', 'https://open.spotify.com');
+    request.setHeader('Referer', 'https://open.spotify.com/');
+    request.setHeader('Sec-Fetch-Dest', 'empty');
+    request.setHeader('Sec-Fetch-Mode', 'cors');
+    request.setHeader('Sec-Fetch-Site', 'same-site');
+    request.setHeader('app-platform', 'WebPlayer');
+    request.setHeader('spotify-app-version', '1.2.30.290.g183057e9');
 
     let responseData = '';
 
@@ -95,8 +103,17 @@ async function apiRequest(endpoint: string, retries = 3): Promise<any> {
       url: `${API_ENDPOINT}${endpoint}`,
     });
 
+    // Browser spoofing headers
+    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     request.setHeader('Authorization', `Bearer ${accessToken}`);
     request.setHeader('Accept', 'application/json');
+    request.setHeader('Origin', 'https://open.spotify.com');
+    request.setHeader('Referer', 'https://open.spotify.com/');
+    request.setHeader('Sec-Fetch-Dest', 'empty');
+    request.setHeader('Sec-Fetch-Mode', 'cors');
+    request.setHeader('Sec-Fetch-Site', 'same-site');
+    request.setHeader('app-platform', 'WebPlayer');
+    request.setHeader('spotify-app-version', '1.2.30.290.g183057e9');
 
     let responseData = '';
 
@@ -315,7 +332,7 @@ export async function getPlaylistTracks(playlistId: string, offset = 0, limit = 
   const playlist = result.data?.playlistV2;
   if (!playlist) throw new Error('Failed to get playlist tracks');
 
-  // Match sonic-liberation exactly: track["itemV2"]["data"] then item["duration"]["totalMilliseconds"]
+ 
   const tracks = playlist.content?.items?.map((trackWrapper: any) => {
     const item = trackWrapper.itemV2?.data;
     if (!item) return null;
@@ -362,7 +379,7 @@ export async function getPlaylistTracks(playlistId: string, offset = 0, limit = 
   }).filter(Boolean) || [];
 
   return {
-    items: tracks.map((track: any) => ({ track })), // Wrap in { track } for compatibility
+    items: tracks.map((track: any) => ({ track })), 
     total: playlist.content?.totalCount || 0,
     offset,
     limit,
@@ -687,6 +704,29 @@ export async function getArtistTopTracks(artistId: string) {
   return { tracks };
 }
 
+export async function getRelatedArtists(artistId: string) {
+  const result = await gqlRequest('queryArtistOverview', HASHES.queryArtistOverview, {
+    uri: `spotify:artist:${artistId}`,
+    locale: ''
+  });
+
+  const artist = result.data?.artistUnion;
+  if (!artist) throw new Error('Failed to get related artists');
+
+  const related = artist.relatedContent?.relatedArtists?.items?.map((item: any) => {
+    const id = item.uri?.split(':').pop();
+    return {
+      id,
+      name: item.profile?.name,
+      uri: item.uri,
+      images: item.visuals?.avatarImage?.sources || [],
+      external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+    };
+  }).filter(Boolean) || [];
+
+  return { artists: related };
+}
+
 // ============ TRACK ENDPOINTS ============
 
 export async function getTrack(trackId: string) {
@@ -755,6 +795,51 @@ export async function removeTracks(trackIds: string[]) {
   return gqlRequest('removeFromLibrary', HASHES.removeFromLibrary, {
     uris: trackIds.map(id => `spotify:track:${id}`)
   });
+}
+
+// ============ RECOMMENDATIONS ============
+
+export async function getRecommendations(seeds: { seed_tracks?: string[], seed_artists?: string[], seed_genres?: string[] }, limit = 10) {
+  // Build query params
+  const params = new URLSearchParams();
+  if (seeds.seed_tracks && seeds.seed_tracks.length > 0) {
+    params.append('seed_tracks', seeds.seed_tracks.join(','));
+  }
+  if (seeds.seed_artists && seeds.seed_artists.length > 0) {
+    params.append('seed_artists', seeds.seed_artists.join(','));
+  }
+  if (seeds.seed_genres && seeds.seed_genres.length > 0) {
+    params.append('seed_genres', seeds.seed_genres.join(','));
+  }
+  params.append('limit', limit.toString());
+
+  // Use REST API (no GraphQL hash available for recommendations)
+  const result = await apiRequest(`/recommendations?${params.toString()}`);
+  
+  if (!result.tracks) {
+    throw new Error('Failed to get recommendations');
+  }
+
+  // Convert to standard track format
+  return result.tracks.map((track: any) => ({
+    id: track.id,
+    name: track.name,
+    uri: track.uri,
+    duration_ms: track.duration_ms,
+    artists: track.artists.map((artist: any) => ({
+      id: artist.id,
+      name: artist.name,
+      uri: artist.uri,
+      external_urls: artist.external_urls
+    })),
+    album: {
+      id: track.album.id,
+      name: track.album.name,
+      images: track.album.images,
+      external_urls: track.album.external_urls
+    },
+    external_urls: track.external_urls
+  }));
 }
 
 // ============ BROWSE/HOME ENDPOINTS ============
@@ -969,7 +1054,8 @@ export const SpotifyGqlApi = {
   user: {
     me: getMe,
     savedTracks: getSavedTracks,
-    savedPlaylists: getSavedPlaylists
+    savedPlaylists: getSavedPlaylists,
+    recentlyPlayed: getRecentlyPlayed
   },
   playlist: {
     get: getPlaylist,
@@ -981,7 +1067,8 @@ export const SpotifyGqlApi = {
   },
   artist: {
     get: getArtist,
-    getTopTracks: getArtistTopTracks
+    getTopTracks: getArtistTopTracks,
+    getRelatedArtists: getRelatedArtists
   },
   track: {
     get: getTrack
@@ -999,6 +1086,49 @@ export const SpotifyGqlApi = {
     removeTracks
   },
   browse: {
-    home: getHome
+    home: getHome,
+    getRecommendations
+  },
+  player: {
+    // Add player namespace if needed in future
   }
 };
+
+export async function getRecentlyPlayed(limit = 50) {
+  // Use REST API for recently played (no consistent GraphQL hash)
+  const result = await apiRequest(`/me/player/recently-played?limit=${limit}`);
+  
+  if (!result.items) {
+    throw new Error('Failed to get recently played tracks');
+  }
+
+  return {
+    items: result.items.map((item: any) => ({
+      track: {
+        id: item.track.id,
+        name: item.track.name,
+        uri: item.track.uri,
+        duration_ms: item.track.duration_ms,
+        artists: item.track.artists.map((artist: any) => ({
+          id: artist.id,
+          name: artist.name,
+          uri: artist.uri,
+          external_urls: artist.external_urls
+        })),
+        album: {
+          id: item.track.album.id,
+          name: item.track.album.name,
+          images: item.track.album.images,
+          external_urls: item.track.album.external_urls
+        },
+        external_urls: item.track.external_urls
+      },
+      played_at: item.played_at
+    }))
+  };
+}
+
+// Re-export with recentlyPlayed added to user namespace for consistency
+// OR add to a new namespace. Let's add to 'user' since it's user data.
+// SpotifyGqlApi.user.recentlyPlayed assignment removed (added to definition)
+

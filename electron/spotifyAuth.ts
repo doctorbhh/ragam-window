@@ -8,7 +8,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 
 const SESSION_FILE = path.join(app.getPath('userData'), 'spotify-session.json');
-const NUANCE_URL = 'https://codeberg.org/sonic-liberation/blubber-junkyard-elitism/raw/branch/main/nuances.json';
+const NUANCE_URL = 'https://gist.githubusercontent.com/saraansx/a622d4c1a12c36afdcf701201e9482a3/raw/9afe2c9c7d1a5eb3f7a05d0002a94f45b73682d0/nuance.json';
 
 interface SpotifySession {
   spDcCookie: string;

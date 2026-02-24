@@ -1,13 +1,21 @@
-import { app, BrowserWindow, ipcMain, session, dialog, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, session, dialog, Tray, Menu, nativeImage, NativeImage, protocol } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
-import { execFile } from 'child_process' // Import native executor
-import { initPluginHandlers } from './pluginHandler'
+import http from 'node:http'
+import { execFile, spawn } from 'child_process'
 import { initSpotifyHandlers } from './spotifyHandler'
 import { spotifyAuth } from './spotifyAuth'
+import { initYTMusicHandlers } from './ytmusicHandler'
+import * as ytmusicAuth from './ytmusicAuth'
+import { registerThumbProtocol } from './thumbnailCache'
 
 // 1. STANDARD CONFIGURATION
 app.commandLine.appendSwitch('ignore-certificate-errors')
+
+// Register custom protocol scheme BEFORE app.ready (Electron requirement)
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'thumb-cache', privileges: { standard: false, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+])
 
 // --- CACHE CONFIGURATION ---
 const CACHE_DIR = path.join(app.getPath('userData'), 'audio-cache')
@@ -29,6 +37,361 @@ const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   enabled: true,
   maxSizeMB: 500
 }
+
+// --- HLS PROXY SERVER ---
+// Proxies YouTube HLS streams to bypass CORS restrictions
+const INITIAL_PROXY_PORT = 47831
+let currentProxyPort = INITIAL_PROXY_PORT
+let proxyServer: http.Server | null = null
+
+const startProxyServer = () => {
+  if (proxyServer) return
+  
+  proxyServer = http.createServer(async (req, res) => {
+    try {
+      const reqUrl = new URL(req.url || '', `http://localhost:${currentProxyPort}`)
+      const pathname = reqUrl.pathname
+
+      // --- NEW: DIRECT STREAMING ENDPOINT ---
+      // Pipes yt-dlp output directly to response
+      if (pathname === '/stream') {
+        const videoId = reqUrl.searchParams.get('id')
+        const quality = reqUrl.searchParams.get('quality') || '720'
+        
+        if (!videoId) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          res.end('Missing id parameter')
+          return
+        }
+
+        const isDev = !app.isPackaged
+        const ffmpegPath = isDev 
+          ? path.join(__dirname, '../bin/ffmpeg.exe')
+          : path.join(process.resourcesPath, 'bin', 'ffmpeg.exe')
+        
+        console.log(`[Proxy] Streaming video: ${videoId} (${quality}p)`)
+        console.log(`[Proxy] Using ffmpeg from: ${ffmpegPath}`)
+
+        const formatSelector = `bv*[height<=${quality}]+ba/b[height<=${quality}]/b`
+
+        const args = [
+          `https://www.youtube.com/watch?v=${videoId}`,
+          '-o', '-', // Output to stdout
+          '--format', formatSelector,
+          '--ffmpeg-location', ffmpegPath,
+          '--merge-output-format', 'mkv',  // MKV/WebM is streamable and supports VP9/Opus
+          '--no-warnings',
+          '--no-check-certificate',
+          '--no-progress',
+          '--quiet',
+          '--user-agent', ELECTRON_USER_AGENT
+        ]
+
+        // Spawn yt-dlp process
+        const ytProcess = spawn(ytDlpPath, args)
+
+        // Set headers for video stream - WebM is safe for Chrome/Electron
+        res.writeHead(200, {
+          'Content-Type': 'video/webm',
+          'Access-Control-Allow-Origin': '*',
+          // 'Transfer-Encoding': 'chunked'
+        })
+
+        // Pipe stdout to response
+        ytProcess.stdout.pipe(res)
+
+        // Error handling
+        ytProcess.stderr.on('data', (data: Buffer) => {
+          // Log only critical errors or first few lines to avoid spam
+          const msg = data.toString()
+          if (msg.includes('Error') || msg.includes('headers')) {
+            console.error(`[Proxy] yt-dlp stderr: ${msg}`)
+          }
+        })
+
+        ytProcess.on('error', (err: Error) => {
+          console.error('[Proxy] Process error:', err)
+          if (!res.headersSent) {
+            res.writeHead(500)
+            res.end('Stream process error')
+          }
+        })
+
+        // Cleanup when client disconnects
+        req.on('close', () => {
+          console.log('[Proxy] Client disconnected, killing process')
+          ytProcess.kill()
+        })
+
+        return
+      }
+
+      // --- AUDIO STREAMING ENDPOINT ---
+      // Pipes yt-dlp audio directly to response (bypasses URL signing issues)
+      if (pathname === '/audio') {
+        const videoId = reqUrl.searchParams.get('id')
+        const quality = reqUrl.searchParams.get('quality') || 'high'
+        
+        if (!videoId) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          res.end('Missing id parameter')
+          return
+        }
+
+        console.log(`[Proxy] Streaming audio: ${videoId} (quality: ${quality})`)
+
+        // Quality-based format selection
+        let formatSelector = 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best'
+        if (quality === 'medium') {
+          formatSelector = 'bestaudio[abr<=128][ext=m4a]/bestaudio[abr<=128]/bestaudio'
+        } else if (quality === 'low') {
+          formatSelector = 'worstaudio[ext=m4a]/worstaudio'
+        }
+
+        const args = [
+          `https://www.youtube.com/watch?v=${videoId}`,
+          '-o', '-', // Output to stdout
+          '--format', formatSelector,
+          '--no-warnings',
+          '--no-check-certificate',
+          '--user-agent', ELECTRON_USER_AGENT,
+          '--no-playlist'
+        ]
+
+        const ytProcess = spawn(ytDlpPath, args)
+
+        // Set headers for audio stream
+        res.writeHead(200, {
+          'Content-Type': 'audio/mp4', // m4a is audio/mp4
+          'Access-Control-Allow-Origin': '*',
+          'Transfer-Encoding': 'chunked',
+          'Cache-Control': 'no-cache'
+        })
+
+        // Pipe stdout to response
+        ytProcess.stdout.pipe(res)
+
+        // Error handling
+        ytProcess.stderr.on('data', (data: Buffer) => {
+          const msg = data.toString()
+          // Only log actual errors, not progress
+          if (msg.includes('ERROR') || msg.includes('error')) {
+            console.error(`[Proxy] yt-dlp audio error: ${msg}`)
+          }
+        })
+
+        ytProcess.on('error', (err: Error) => {
+          console.error('[Proxy] Audio process error:', err)
+          if (!res.headersSent) {
+            res.writeHead(500)
+            res.end('Audio stream process error')
+          }
+        })
+
+        ytProcess.on('close', (code) => {
+          if (code !== 0 && code !== null) {
+            console.error(`[Proxy] yt-dlp exited with code ${code}`)
+          }
+        })
+
+        // Cleanup when client disconnects
+        req.on('close', () => {
+          console.log('[Proxy] Audio client disconnected, killing process')
+          ytProcess.kill()
+        })
+
+        return
+      }
+
+      // --- HLS PLAYLIST GENERATOR ---
+      // Generates a custom m3u8 master playlist from available YouTube formats
+      if (pathname === '/playlist') {
+        const videoId = reqUrl.searchParams.get('id')
+        
+        if (!videoId) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          res.end('Missing id parameter')
+          return
+        }
+
+        console.log(`[Proxy] Generating HLS playlist for: ${videoId}`)
+
+        try {
+          // Get all available formats
+          const args = [
+            `https://www.youtube.com/watch?v=${videoId}`,
+            '--dump-single-json',
+            '--no-warnings',
+            '--no-check-certificate',
+            '--user-agent', ELECTRON_USER_AGENT
+          ]
+
+          const ytProcess = spawn(ytDlpPath, args)
+          let jsonOutput = ''
+
+          ytProcess.stdout.on('data', (data: Buffer) => {
+            jsonOutput += data.toString()
+          })
+
+          ytProcess.on('close', (code) => {
+            if (code !== 0) {
+              res.writeHead(500, { 'Content-Type': 'text/plain' })
+              res.end('Failed to get video info')
+              return
+            }
+
+            try {
+              const output = JSON.parse(jsonOutput)
+              
+              // Filter for muxed formats (video + audio together)
+              const muxedFormats = (output.formats || [])
+                .filter((f: any) => 
+                  f.vcodec !== 'none' && 
+                  f.acodec !== 'none' && 
+                  f.url &&
+                  f.height
+                )
+                .sort((a: any, b: any) => (b.height || 0) - (a.height || 0))
+
+              if (muxedFormats.length === 0) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' })
+                res.end('No muxed formats available')
+                return
+              }
+
+              // Generate HLS master playlist
+              let m3u8 = '#EXTM3U\n'
+              m3u8 += '#EXT-X-VERSION:3\n'
+
+              // Add each quality as a variant stream
+              for (const format of muxedFormats) {
+                const bandwidth = format.tbr ? Math.round(format.tbr * 1000) : (format.height * 3000)
+                const resolution = `${format.width || format.height * 16 / 9}x${format.height}`
+                const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(format.url)}`
+                
+                m3u8 += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${format.height}p"\n`
+                m3u8 += `${proxyUrl}\n`
+              }
+
+              // Set response headers
+              res.writeHead(200, {
+                'Content-Type': 'application/vnd.apple.mpegurl',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-cache'
+              })
+              res.end(m3u8)
+
+              console.log(`[Proxy] Generated HLS playlist with ${muxedFormats.length} qualities`)
+            } catch (parseError) {
+              console.error('[Proxy] Failed to parse yt-dlp output:', parseError)
+              res.writeHead(500, { 'Content-Type': 'text/plain' })
+              res.end('Failed to parse video info')
+            }
+          })
+
+          ytProcess.on('error', (err) => {
+            console.error('[Proxy] yt-dlp error:', err)
+            res.writeHead(500, { 'Content-Type': 'text/plain' })
+            res.end('Failed to start yt-dlp')
+          })
+
+          return
+        } catch (error: any) {
+          console.error('[Proxy] Playlist error:', error)
+          res.writeHead(500, { 'Content-Type': 'text/plain' })
+          res.end(`Playlist error: ${error.message}`)
+          return
+        }
+      }
+
+      // --- EXISTING HLS PROXY LOGIC ---
+      const targetUrl = reqUrl.searchParams.get('url')
+      
+      if (!targetUrl) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.end('Missing url or id parameter')
+        return
+      }
+      
+      // Fetch from YouTube with proper headers
+      const response = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': ELECTRON_USER_AGENT,
+          'Referer': 'https://www.youtube.com/',
+          'Origin': 'https://www.youtube.com'
+        }
+      })
+      
+      if (!response.ok) {
+        res.writeHead(response.status)
+        res.end(`Upstream error: ${response.status}`)
+        return
+      }
+      
+      const contentType = response.headers.get('content-type') || 'application/octet-stream'
+      
+      // Set CORS headers
+      const headers: Record<string, string> = {
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*'
+      }
+      
+      // Handle OPTIONS preflight
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, headers)
+        res.end()
+        return
+      }
+      
+      // For m3u8 manifests, rewrite URLs to go through proxy
+      if (targetUrl.includes('.m3u8') || contentType.includes('mpegurl')) {
+        let content = await response.text()
+        // Rewrite absolute URLs
+        content = content.replace(/^(https?:\/\/[^\s]+)/gm, (match) => {
+          return `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(match)}`
+        })
+        res.writeHead(200, headers)
+        res.end(content)
+      } else {
+        // Stream binary content (video segments)
+        const buffer = Buffer.from(await response.arrayBuffer())
+        res.writeHead(200, { ...headers, 'Content-Length': buffer.length.toString() })
+        res.end(buffer)
+      }
+    } catch (error: any) {
+      console.error('[HLS Proxy] Error:', error.message)
+      res.writeHead(500)
+      res.end(`Proxy error: ${error.message}`)
+    }
+  })
+  
+  proxyServer.listen(currentProxyPort, () => {
+    console.log(`[Proxy] Server running on port ${currentProxyPort}`)
+  })
+  
+  proxyServer.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`[Proxy] Port ${currentProxyPort} in use, trying next port`)
+      currentProxyPort++
+      proxyServer?.listen(currentProxyPort)
+    } else {
+      console.error('[Proxy] Server error:', err)
+    }
+  })
+}
+
+const stopProxyServer = () => {
+  if (proxyServer) {
+    proxyServer.close()
+    proxyServer = null
+    console.log('[HLS Proxy] Server stopped')
+  }
+}
+
+// Export port for use in IPC handlers
+const getProxyPort = () => currentProxyPort
 
 // Ensure cache directory exists
 const ensureCacheDir = () => {
@@ -126,9 +489,9 @@ const evictIfNeeded = (maxSizeBytes: number, reserveBytes: number = 0) => {
 // --- CACHE IPC HANDLERS ---
 ipcMain.handle('cache-get', async (_, key: string) => {
   try {
-    const settings = getCacheSettings()
-    if (!settings.enabled) return null
-
+    // NOTE: We intentionally do NOT check if cache is enabled here.
+    // This allows existing cached songs to be used even when caching is disabled.
+    // The cache-put handler checks the enabled setting to prevent NEW caching.
     const audioPath = path.join(CACHE_DIR, `${key}.audio`)
     if (fs.existsSync(audioPath)) {
       const data = fs.readFileSync(audioPath)
@@ -368,6 +731,177 @@ ipcMain.handle('song-pref-clear', async () => {
   }
 })
 
+// --- LYRICS PREFERENCE SYSTEM ---
+// Stores user's preferred lyrics for each track (when auto-fetch gets wrong lyrics)
+const LYRICS_PREFS_FILE = path.join(app.getPath('userData'), 'lyrics-preferences.json')
+
+interface LyricsPreference {
+  searchQuery: string // The search query used to find these lyrics
+  syncedLyrics?: string // LRC format synced lyrics
+  plainLyrics?: string // Plain text lyrics
+  source?: string // e.g. "LRCLIB manual search"
+  savedAt: number
+}
+
+// Load lyrics preferences
+const loadLyricsPreferences = (): Record<string, LyricsPreference> => {
+  try {
+    if (fs.existsSync(LYRICS_PREFS_FILE)) {
+      const data = fs.readFileSync(LYRICS_PREFS_FILE, 'utf-8')
+      return JSON.parse(data)
+    }
+  } catch (e) {
+    console.error('Error loading lyrics preferences:', e)
+  }
+  return {}
+}
+
+// Save lyrics preferences
+const saveLyricsPreferences = (prefs: Record<string, LyricsPreference>) => {
+  try {
+    fs.writeFileSync(LYRICS_PREFS_FILE, JSON.stringify(prefs, null, 2))
+  } catch (e) {
+    console.error('Error saving lyrics preferences:', e)
+  }
+}
+
+// Get lyrics preference for a specific track
+ipcMain.handle('lyrics-pref-get', async (_, trackKey: string) => {
+  try {
+    const prefs = loadLyricsPreferences()
+    return prefs[trackKey] || null
+  } catch (e) {
+    console.error('Lyrics pref get error:', e)
+    return null
+  }
+})
+
+// Set lyrics preference for a specific track
+ipcMain.handle(
+  'lyrics-pref-set',
+  async (_, trackKey: string, preference: LyricsPreference) => {
+    try {
+      const prefs = loadLyricsPreferences()
+      prefs[trackKey] = {
+        ...preference,
+        savedAt: Date.now()
+      }
+      saveLyricsPreferences(prefs)
+      console.log(`[LyricsPref] Saved preference for: ${trackKey}`)
+      return true
+    } catch (e) {
+      console.error('Lyrics pref set error:', e)
+      return false
+    }
+  }
+)
+
+// Delete lyrics preference for a specific track
+ipcMain.handle('lyrics-pref-delete', async (_, trackKey: string) => {
+  try {
+    const prefs = loadLyricsPreferences()
+    if (prefs[trackKey]) {
+      delete prefs[trackKey]
+      saveLyricsPreferences(prefs)
+      console.log(`[LyricsPref] Deleted preference for: ${trackKey}`)
+    }
+    return true
+  } catch (e) {
+    console.error('Lyrics pref delete error:', e)
+    return false
+  }
+})
+
+// --- SAVED PLAYLISTS LIBRARY ---
+// Stores playlists that user saves from search to their local library
+const SAVED_PLAYLISTS_FILE = path.join(app.getPath('userData'), 'saved-playlists.json')
+
+interface SavedPlaylist {
+  id: string
+  name: string
+  description?: string
+  imageUrl?: string
+  ownerName?: string
+  trackCount?: number
+  savedAt: number
+}
+
+// Load saved playlists
+const loadSavedPlaylists = (): SavedPlaylist[] => {
+  try {
+    if (fs.existsSync(SAVED_PLAYLISTS_FILE)) {
+      const data = fs.readFileSync(SAVED_PLAYLISTS_FILE, 'utf-8')
+      return JSON.parse(data)
+    }
+  } catch (e) {
+    console.error('Error loading saved playlists:', e)
+  }
+  return []
+}
+
+// Save playlists to file
+const savePlaylists = (playlists: SavedPlaylist[]) => {
+  try {
+    fs.writeFileSync(SAVED_PLAYLISTS_FILE, JSON.stringify(playlists, null, 2))
+  } catch (e) {
+    console.error('Error saving playlists:', e)
+  }
+}
+
+// Get all saved playlists
+ipcMain.handle('saved-playlists-get', async () => {
+  try {
+    return loadSavedPlaylists()
+  } catch (e) {
+    console.error('Saved playlists get error:', e)
+    return []
+  }
+})
+
+// Add a playlist to library
+ipcMain.handle('saved-playlists-add', async (_, playlist: SavedPlaylist) => {
+  try {
+    const playlists = loadSavedPlaylists()
+    // Check if already saved
+    if (playlists.some(p => p.id === playlist.id)) {
+      console.log(`[Library] Playlist already saved: ${playlist.name}`)
+      return true
+    }
+    playlists.unshift({ ...playlist, savedAt: Date.now() })
+    savePlaylists(playlists)
+    console.log(`[Library] Added playlist: ${playlist.name}`)
+    return true
+  } catch (e) {
+    console.error('Saved playlists add error:', e)
+    return false
+  }
+})
+
+// Remove a playlist from library
+ipcMain.handle('saved-playlists-remove', async (_, playlistId: string) => {
+  try {
+    const playlists = loadSavedPlaylists()
+    const filtered = playlists.filter(p => p.id !== playlistId)
+    savePlaylists(filtered)
+    console.log(`[Library] Removed playlist: ${playlistId}`)
+    return true
+  } catch (e) {
+    console.error('Saved playlists remove error:', e)
+    return false
+  }
+})
+
+// Check if a playlist is saved
+ipcMain.handle('saved-playlists-check', async (_, playlistId: string) => {
+  try {
+    const playlists = loadSavedPlaylists()
+    return playlists.some(p => p.id === playlistId)
+  } catch (e) {
+    console.error('Saved playlists check error:', e)
+    return false
+  }
+})
+
 // --- SPOTIFY SESSION STORAGE ---
 const SPOTIFY_STORAGE_FILE = path.join(app.getPath('userData'), 'spotify-session.json');
 
@@ -422,6 +956,11 @@ if (!isDev && !fs.existsSync(ytDlpPath)) {
   dialog.showErrorBox('Critical Error', `yt-dlp.exe missing at:\n${ytDlpPath}`)
 }
 
+// --- SHARED USER-AGENT ---
+// CRITICAL: This User-Agent MUST match between yt-dlp and Electron to avoid 403 errors
+// YouTube URLs are signed with the User-Agent that requested them
+const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
 /**
  * Custom wrapper to run yt-dlp binary directly
  * Bypasses the library to ensure we use the correct .exe path
@@ -449,11 +988,25 @@ const runYtDlp = (args: string[]): Promise<any> => {
 const pendingDownloads = new Map<string, { filename: string; saveAs: boolean }>()
 
 function createWindow() {
+  // Start HLS Proxy Server
+  startProxyServer()
+  
   win = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 900,
+    minHeight: 600,
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
     autoHideMenuBar: true,
+    frame: false, // Frameless window for custom title bar
+    titleBarStyle: 'hidden', // Hide native title bar
+    titleBarOverlay: {
+      // Windows: Show native window controls (minimize, maximize, close) with custom styling
+      color: '#121212', // Background color of title bar overlay
+      symbolColor: '#ffffff', // Color of window control icons
+      height: 40 // Height of the title bar area
+    },
+    backgroundColor: '#121212',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -462,11 +1015,27 @@ function createWindow() {
     }
   })
   win.setMenuBarVisibility(false)
+
+  // Block dev tools shortcuts in production
+  if (app.isPackaged) {
+    win.webContents.on('before-input-event', (event, input) => {
+      // Block F12
+      if (input.key === 'F12') {
+        event.preventDefault()
+      }
+      // Block Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C
+      if (input.control && input.shift && ['I', 'J', 'C'].includes(input.key)) {
+        event.preventDefault()
+      }
+    })
+  }
+
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', new Date().toLocaleString())
   })
 
-  // HEADER INTERCEPTOR (Prevents "Video Unavailable")
+  // HEADER INTERCEPTOR (Prevents "Video Unavailable" and 403 errors)
+  // CRITICAL: Sets matching headers for YouTube/GoogleVideo requests to avoid signature mismatch
   win.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: ['*://*.youtube.com/*', '*://*.googlevideo.com/*'] },
     (details, callback) => {
@@ -478,6 +1047,8 @@ function createWindow() {
       })
       requestHeaders['Referer'] = 'https://www.youtube.com/'
       requestHeaders['Origin'] = 'https://www.youtube.com'
+      // CRITICAL: User-Agent MUST match what yt-dlp used to generate the URL
+      requestHeaders['User-Agent'] = ELECTRON_USER_AGENT
       callback({ requestHeaders })
     }
   )
@@ -544,16 +1115,35 @@ function createWindow() {
 
   // --- SYSTEM TRAY ---
   if (!tray) {
-    // Create a simple 16x16 icon programmatically (Electron tray doesn't support SVG on Windows)
-    // Using a data URL for a simple music note icon
-    const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADfSURBVDiNpZMxDoJAEEXfLhYmFjZewMbGxMQLeBN7C2+gd7Cx9AYcwNLL2GhjZ2dBQmICsptQCJBlJ5Ns8f/szOwfYKG1fkhBLoANsAMiYGcavsLME7AH4tQnhMBDAGugBlrmWQEBsAXutNYnM/8K7A1rlFJlEi+B+H8MEbABbrXWRynnBRb/JQihYg4wBrrm/hxomLlvYEFmDuwDG6BttN4FXGQZEAPXQNnMbcKQKaVKJdADQq31ycRChh4wABpG6x0hjYGhuT8DamYOZv6aWMjLwNDcHwNV8/cBeAe/iyFO7WBXRQAAAABJRU5ErkJggg=='
+    // Path resolution
+    const publicDir = process.env.VITE_PUBLIC || '';
+    const iconIco = path.join(publicDir, 'icon.ico');
+    const iconPng = path.join(publicDir, 'icon.png');
     
-    const trayIcon = nativeImage.createFromDataURL(iconDataUrl)
-    
-    tray = new Tray(trayIcon)
-    tray.setToolTip('Ragam Music Player')
+    console.log('[Tray] Looking for icons at:', { iconIco, iconPng });
 
-    const contextMenu = Menu.buildFromTemplate([
+    let trayIcon: NativeImage | null = null;
+
+    if (fs.existsSync(iconIco)) {
+      console.log('[Tray] Found .ico');
+      trayIcon = nativeImage.createFromPath(iconIco);
+    } else if (fs.existsSync(iconPng)) {
+      console.log('[Tray] Found .png');
+      const image = nativeImage.createFromPath(iconPng);
+      // Resize to 16x16 for tray if using PNG
+      trayIcon = image.resize({ width: 16, height: 16 });
+    } else {
+      console.log('[Tray] No icon found, using fallback base64');
+       // Fallback to simple data URL if all else fails
+       const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADfSURBVDiNpZMxDoJAEEXfLhYmFjZewMbGxMQLeBN7C2+gd7Cx9AYcwNLL2GhjZ2dBQmICsptQCJBlJ5Ns8f/szOwfYKG1fkhBLoANsAMiYGcavsLME7AH4tQnhMBDAGugBlrmWQEBsAXutNYnM/8K7A1rlFJlEi+B+H8MEbABbrXWRynnBRb/JQihYg4wBrrm/hxomLlvYEFmDuwDG6BttN4FXGQZEAPXQNnMbcKQKaVKJdADQq31ycRChh4wABpG6x0hjYGhuT8DamYOZv6aWMjLwNDcHwNV8/cBeAe/iyFO7WBXRQAAAABJRU5ErkJggg=='
+       trayIcon = nativeImage.createFromDataURL(iconDataUrl);
+    }
+    
+    if (trayIcon) {
+       tray = new Tray(trayIcon);
+       tray.setToolTip('Ragam Music Player');
+       
+       const contextMenu = Menu.buildFromTemplate([
       {
         label: 'Show App',
         click: () => {
@@ -606,6 +1196,7 @@ function createWindow() {
         win.focus()
       }
     })
+    }
   }
 }
 
@@ -717,7 +1308,8 @@ ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
   try {
     console.log(`[YouTube] Fetching Stream for: ${videoId} (Quality: ${quality})`)
     const url = `https://www.youtube.com/watch?v=${videoId}`
-
+    
+    // Get all formats to find best audio
     let formatSelector = 'bestaudio/best'
     if (quality === 'medium') {
       formatSelector = 'bestaudio[abr<=128]/bestaudio'
@@ -729,17 +1321,19 @@ ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
       url,
       '--dump-single-json',
       '--no-warnings',
-      '--format',
-      formatSelector,
-      '--no-check-certificate'
+      '--no-check-certificate',
+      '--format', formatSelector
     ]
 
     const output = await runYtDlp(args)
 
     if (!output || !output.url) throw new Error('No stream URL found')
 
+    // Return direct YouTube URL (supports seeking via Range headers)
+    console.log(`[YouTube] Returning direct audio URL for: ${videoId}`)
+
     return {
-      url: output.url,
+      url: output.url,  // Direct YouTube URL for seeking support
       duration: output.duration,
       title: output.title
     }
@@ -785,6 +1379,128 @@ ipcMain.handle('youtube-video-url', async (_, videoId) => {
       title: output.title,
       isHls: streamUrl.includes('.m3u8')
     }
+  } catch (error: any) {
+    console.error('[YouTube] Video Stream Error:', error)
+    return null
+  }
+})
+
+// --- HANDLER: GET VIDEO STREAM WITH QUALITY SELECTION ---
+// Prioritizes HLS for adaptive quality, falls back to muxed MP4
+ipcMain.handle('youtube-video-stream', async (_, videoId, maxHeight = 1080) => {
+  try {
+    console.log(`[YouTube] Fetching Video Stream for: ${videoId} (Max Height: ${maxHeight}p)`)
+    const url = `https://www.youtube.com/watch?v=${videoId}`
+
+    // Get all format info without specifying a format
+    const args = [
+      url,
+      '--dump-single-json',
+      '--no-warnings',
+      '--no-check-certificate',
+      '--user-agent', ELECTRON_USER_AGENT
+    ]
+
+    const output = await runYtDlp(args)
+    if (!output) throw new Error('No data returned from yt-dlp')
+
+    // Strategy 1: Try to get HLS manifest (best for adaptive quality)
+    let hlsUrl = output.manifest_url
+    
+    if (!hlsUrl && output.formats) {
+      // Look for HLS format in formats list
+      const hlsFormat = output.formats.find(
+        (f: any) => f.protocol === 'm3u8' || f.protocol === 'm3u8_native' || 
+                    (f.url && f.url.includes('.m3u8'))
+      )
+      if (hlsFormat) {
+        hlsUrl = hlsFormat.url
+      }
+    }
+
+    if (hlsUrl) {
+      console.log(`[YouTube] Found HLS manifest for adaptive quality`)
+      const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(hlsUrl)}`
+      
+      return {
+        type: 'hls',
+        url: proxyUrl,
+        isHls: true,
+        title: output.title,
+        duration: output.duration,
+        thumbnail: output.thumbnail,
+        qualities: ['auto', '1080p', '720p', '480p', '360p', '240p'] // HLS has all
+      }
+    }
+
+    // Strategy 2: Use yt-dlp piped streaming (merges video+audio on-the-fly for higher qualities)
+    console.log(`[YouTube] No native HLS, using yt-dlp piped streaming`)
+    
+    // Get ALL video formats (including video-only which yt-dlp will merge with audio)
+    // This enables 1080p, 1440p, 4K quality options
+    const videoFormats = output.formats
+      ?.filter((f: any) => 
+        f.vcodec !== 'none' && 
+        f.height &&
+        f.height >= 144  // Filter out tiny formats
+      )
+      .sort((a: any, b: any) => (b.height || 0) - (a.height || 0)) || []
+
+    // Get unique quality heights
+    const heightSet = new Set<number>(videoFormats.map((f: any) => f.height as number))
+    const allHeights: number[] = Array.from(heightSet)
+      .filter(h => h && h >= 144)
+      .sort((a, b) => b - a)
+
+    if (allHeights.length > 0) {
+      // Select best quality up to maxHeight
+      const selectedHeight = allHeights.find(h => h <= maxHeight) || allHeights[allHeights.length - 1]
+      const availableQualities = allHeights.map(h => `${h}p`)
+      
+      // Use /stream endpoint for direct yt-dlp piping (merges video+audio on-the-fly)
+      const streamUrl = `http://localhost:${currentProxyPort}/stream?id=${videoId}&quality=${selectedHeight}`
+      console.log(`[YouTube] Returning ${selectedHeight}p piped stream (${availableQualities.length} qualities: ${availableQualities.slice(0, 5).join(', ')}...)`)
+      
+      return {
+        type: 'muxed',
+        url: streamUrl,  // Piped through yt-dlp with on-the-fly merging
+        isHls: false,
+        height: selectedHeight,
+        format: 'webm',
+        title: output.title,
+        duration: output.duration,
+        thumbnail: output.thumbnail,
+        qualities: availableQualities
+      }
+    }
+
+    // Strategy 3: Last resort - try format 22 (720p) or 18 (360p)
+    console.log(`[YouTube] No formats available, trying fallback formats 22/18`)
+    const fallbackArgs = [
+      url,
+      '--dump-single-json',
+      '--no-warnings',
+      '--no-check-certificate',
+      '--format', '22/18',
+      '--user-agent', ELECTRON_USER_AGENT
+    ]
+    const fallbackOutput = await runYtDlp(fallbackArgs)
+    if (fallbackOutput?.url) {
+      const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(fallbackOutput.url)}`
+      return {
+        type: 'muxed',
+        url: proxyUrl,
+        isHls: false,
+        height: fallbackOutput.height || 360,
+        format: 'mp4',
+        title: fallbackOutput.title,
+        duration: fallbackOutput.duration,
+        thumbnail: fallbackOutput.thumbnail,
+        qualities: [`${fallbackOutput.height || 360}p`]
+      }
+    }
+    
+    throw new Error('No video URL found')
   } catch (error: any) {
     console.error('[YouTube] Video Stream Error:', error)
     return null
@@ -973,6 +1689,73 @@ ipcMain.handle('spotify-logout', async () => {
   return { success: true };
 });
 
+// --- YOUTUBE MUSIC LOGIN ---
+ipcMain.handle('ytmusic-login', async () => {
+  return new Promise((resolve, reject) => {
+    const authWindow = new BrowserWindow({
+      width: 900,
+      height: 700,
+      show: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        partition: 'persist:ytmusic_login',
+        webSecurity: false
+      }
+    });
+
+    const authSession = authWindow.webContents.session;
+    authWindow.loadURL('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com/');
+
+    let isResolved = false;
+
+    const checkLoginSuccess = async () => {
+      if (isResolved || authWindow.isDestroyed()) return;
+
+      try {
+        const currentUrl = authWindow.webContents.getURL();
+        const isOnYTMusic = currentUrl.includes('music.youtube.com');
+
+        if (isOnYTMusic) {
+          const allCookies = await authSession.cookies.get({ url: 'https://music.youtube.com' });
+          const hasSID = allCookies.some(c => c.name === 'SID');
+          const hasSAPISID = allCookies.some(c => c.name === 'SAPISID' || c.name === '__Secure-3PAPISID');
+
+          if (hasSID && hasSAPISID) {
+            const cookieString = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
+            console.log('[YTMusic Auth] Login detected! Cookies:', allCookies.map(c => c.name).join(', '));
+
+            isResolved = true;
+            clearInterval(cookieCheckInterval);
+
+            ytmusicAuth.setCookies(cookieString);
+
+            setTimeout(() => {
+              if (!authWindow.isDestroyed()) authWindow.close();
+            }, 500);
+
+            resolve({ success: true });
+          }
+        }
+      } catch (error) {
+        console.error('[YTMusic Auth] Check error:', error);
+      }
+    };
+
+    const cookieCheckInterval = setInterval(checkLoginSuccess, 2000);
+
+    authWindow.on('closed', () => {
+      clearInterval(cookieCheckInterval);
+      if (!isResolved) {
+        reject(new Error('Login cancelled by user'));
+      }
+    });
+  });
+});
+
+initYTMusicHandlers();
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
@@ -987,7 +1770,8 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
-  initPluginHandlers()
+  registerThumbProtocol()
+  ytmusicAuth.restoreSession()
   initSpotifyHandlers()
   createWindow()
 })

@@ -33,6 +33,12 @@ export const setAudioQuality = (q: string) => localStorage.setItem(STORAGE_KEY_Q
 export const getSearchRegion = () => localStorage.getItem(STORAGE_KEY_REGION) || DEFAULT_REGION
 export const setSearchRegion = (region: string) => localStorage.setItem(STORAGE_KEY_REGION, region)
 
+// Theme Getters/Setters
+const STORAGE_KEY_THEME = 'ragam_theme'
+export const DEFAULT_THEME = 'default'
+export const getTheme = () => localStorage.getItem(STORAGE_KEY_THEME) || DEFAULT_THEME
+export const setTheme = (theme: string) => localStorage.setItem(STORAGE_KEY_THEME, theme)
+
 // Audio Normalization Getters/Setters
 export const getAudioNormalization = (): boolean => {
   const stored = localStorage.getItem(STORAGE_KEY_NORMALIZATION)
@@ -40,6 +46,15 @@ export const getAudioNormalization = (): boolean => {
 }
 export const setAudioNormalization = (enabled: boolean) =>
   localStorage.setItem(STORAGE_KEY_NORMALIZATION, String(enabled))
+
+// Volume Getters/Setters
+const STORAGE_KEY_VOLUME = 'ragam_player_volume'
+export const getStoredVolume = (): number => {
+  const stored = localStorage.getItem(STORAGE_KEY_VOLUME)
+  return stored ? parseFloat(stored) : 1
+}
+export const setStoredVolume = (vol: number) => 
+  localStorage.setItem(STORAGE_KEY_VOLUME, String(vol))
 
 // Fetch dynamic instances from remote config
 export const fetchInstances = async (): Promise<{

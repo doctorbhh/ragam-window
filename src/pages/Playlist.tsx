@@ -1,10 +1,10 @@
 import { useEffect, useState, useMemo, useCallback, memo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { getPlaylist, getAllPlaylistTracks } from '@/services/spotifyservice'
 import { SpotifyPlaylist, SpotifyTrack } from '@/types/spotify'
 import TrackItem from '@/components/TrackItem'
-import { Play, Pause, Clock, Shuffle, Search, X } from 'lucide-react'
+import { Play, Pause, Clock, Shuffle, Search, X, Plus, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -116,6 +116,8 @@ const PlaylistControls = memo(({
 
 const Playlist = () => {
   const { playlistId } = useParams<{ playlistId: string }>()
+  const [searchParams] = useSearchParams()
+  const isYTMusic = searchParams.get('source') === 'ytmusic'
   const { spotifyToken } = useSpotifyAuth()
 
   const [playlist, setPlaylist] = useState<SpotifyPlaylist | null>(null)
@@ -124,14 +126,71 @@ const Playlist = () => {
   const [fetchingAllTracks, setFetchingAllTracks] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   
+  // Saved to library state
+  const [isSaved, setIsSaved] = useState(false)
+  
   // Stable callback references to prevent SearchInput re-renders
   const handleSearchClear = useCallback(() => setSearchQuery(''), [])
 
   useEffect(() => {
-    if (spotifyToken && playlistId) {
-      fetchPlaylistDetails()
+    if (playlistId) {
+      if (isYTMusic) {
+        fetchYTMusicPlaylist()
+      } else if (spotifyToken) {
+        fetchPlaylistDetails()
+        window.electron.savedPlaylists.check(playlistId).then(setIsSaved).catch(() => {})
+      }
     }
-  }, [spotifyToken, playlistId])
+  }, [spotifyToken, playlistId, isYTMusic])
+
+  const fetchYTMusicPlaylist = async () => {
+    setLoading(true)
+    try {
+      // @ts-ignore
+      const data = await window.electron.ytmusic.getPlaylist(playlistId!)
+      
+      const normalizedPlaylist: SpotifyPlaylist = {
+        id: data.id || playlistId!,
+        name: data.title || 'YouTube Music Playlist',
+        description: data.subtitle || '',
+        images: data.imageUrl ? [{ url: data.imageUrl, height: 300, width: 300 }] : [],
+        owner: { id: 'ytmusic', display_name: 'YouTube Music' },
+        tracks: { total: data.trackCount || 0, items: [] }
+      }
+      setPlaylist(normalizedPlaylist)
+
+      const normalizedTracks: SpotifyTrack[] = (data.tracks || []).map((track: any) => {
+        const artists = Array.isArray(track.artists)
+          ? track.artists.map((a: any) => ({ id: a.id || '', name: a.name || '' }))
+          : typeof track.artists === 'string'
+            ? track.artists.split(',').map((name: string) => ({ id: '', name: name.trim() }))
+            : [{ id: '', name: 'Unknown' }]
+
+        return {
+          id: track.videoId || track.id || Math.random().toString(36),
+          name: track.title || '',
+          duration_ms: track.durationMs || 0,
+          url: '',
+          uri: `youtube:${track.videoId}`,
+          artists,
+          album: {
+            id: track.album?.id || '',
+            name: track.album?.name || track.albumName || '',
+            images: track.imageUrl ? [{ url: track.imageUrl, height: 300, width: 300 }] : [],
+            artists
+          }
+        }
+      }).filter((t: SpotifyTrack) => t.id && t.name)
+
+      setTracks(normalizedTracks)
+      toast.success(`Loaded ${normalizedTracks.length} tracks`)
+    } catch (error) {
+      console.error('Error fetching YouTube Music playlist:', error)
+      toast.error('Failed to load YouTube Music playlist')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const fetchPlaylistDetails = async () => {
     setLoading(true)
@@ -143,7 +202,6 @@ const Playlist = () => {
       toast.info(`Fetching all ${playlistData.tracks.total} tracks...`)
 
       const allTracks = await getAllPlaylistTracks(spotifyToken!, playlistId!)
-      // getAllPlaylistTracks already returns unwrapped tracks, filter out any undefined
       const validTracks = allTracks.filter((track: any) => track && track.id)
       setTracks(validTracks)
 
@@ -215,6 +273,34 @@ const Playlist = () => {
           <p className="text-muted-foreground">
             {playlist.description || `${playlist.tracks.total} songs`}
           </p>
+          
+          {/* Add to Library Button */}
+          <button
+            onClick={async () => {
+              if (isSaved) return
+              try {
+                await window.electron.savedPlaylists.add({
+                  id: playlist.id,
+                  name: playlist.name,
+                  description: playlist.description,
+                  imageUrl: playlist.images?.[0]?.url,
+                  ownerName: playlist.owner?.display_name,
+                  trackCount: playlist.tracks?.total
+                })
+                setIsSaved(true)
+                toast.success('Added to Library')
+              } catch (e) {
+                toast.error('Failed to save playlist')
+              }
+            }}
+            className={`mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+              isSaved 
+                ? 'bg-primary/20 text-primary cursor-default' 
+                : 'bg-white/10 hover:bg-primary text-white hover:text-primary-foreground'
+            }`}
+          >
+            {isSaved ? <><Check className="h-4 w-4" /> Added to Library</> : <><Plus className="h-4 w-4" /> Add to Library</>}
+          </button>
         </div>
       </header>
 

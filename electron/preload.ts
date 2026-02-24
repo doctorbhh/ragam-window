@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('electron', {
     getArtist: (artistId: string) => ipcRenderer.invoke('spotify:get-artist', artistId),
     getArtistTopTracks: (artistId: string, market?: string) => 
       ipcRenderer.invoke('spotify:get-artist-top-tracks', artistId, market),
+    getRelatedArtists: (artistId: string) => 
+      ipcRenderer.invoke('spotify:get-related-artists', artistId),
     getPlaylist: (playlistId: string) => ipcRenderer.invoke('spotify:get-playlist', playlistId),
     getLyrics: (trackId: string) => ipcRenderer.invoke('spotify:get-lyrics', trackId),
     getRecommendations: (seeds: any, limit?: number) => 
@@ -55,7 +57,11 @@ contextBridge.exposeInMainWorld('electron', {
     // Library
     checkSavedTracks: (trackIds: string[]) => ipcRenderer.invoke('spotify:check-saved-tracks', trackIds),
     saveTracks: (trackIds: string[]) => ipcRenderer.invoke('spotify:save-tracks', trackIds),
-    removeTracks: (trackIds: string[]) => ipcRenderer.invoke('spotify:remove-tracks', trackIds)
+    removeTracks: (trackIds: string[]) => ipcRenderer.invoke('spotify:remove-tracks', trackIds),
+
+    // Auth
+    isAuthenticated: () => ipcRenderer.invoke('spotify:is-authenticated'),
+    getAccessToken: () => ipcRenderer.invoke('spotify:get-access-token')
   },
 
   youtube: {
@@ -66,7 +72,17 @@ contextBridge.exposeInMainWorld('electron', {
 
     getStream: (videoId: string, quality?: string) =>
       ipcRenderer.invoke('youtube-stream', videoId, quality),
-    getVideo: (videoId: string) => ipcRenderer.invoke('youtube-video-url', videoId)
+    getVideo: (videoId: string) => ipcRenderer.invoke('youtube-video-url', videoId),
+    
+    // NEW: Get video stream with quality selection (MPV-style bestvideo+bestaudio)
+    getVideoStream: (videoId: string, maxHeight?: number) =>
+      ipcRenderer.invoke('youtube-video-stream', videoId, maxHeight),
+    
+    // Video download progress events
+    onVideoProgress: (callback: (data: any) => void) =>
+      ipcRenderer.on('video-download-progress', (_, data) => callback(data)),
+    removeVideoProgressListener: () =>
+      ipcRenderer.removeAllListeners('video-download-progress')
   },
 
   download: {
@@ -103,6 +119,20 @@ contextBridge.exposeInMainWorld('electron', {
     clear: () => ipcRenderer.invoke('song-pref-clear')
   },
 
+  lyricsPref: {
+    get: (trackKey: string) => ipcRenderer.invoke('lyrics-pref-get', trackKey),
+    set: (trackKey: string, preference: object) =>
+      ipcRenderer.invoke('lyrics-pref-set', trackKey, preference),
+    delete: (trackKey: string) => ipcRenderer.invoke('lyrics-pref-delete', trackKey)
+  },
+
+  savedPlaylists: {
+    getAll: () => ipcRenderer.invoke('saved-playlists-get'),
+    add: (playlist: object) => ipcRenderer.invoke('saved-playlists-add', playlist),
+    remove: (playlistId: string) => ipcRenderer.invoke('saved-playlists-remove', playlistId),
+    check: (playlistId: string) => ipcRenderer.invoke('saved-playlists-check', playlistId)
+  },
+
   tray: {
     onPlayPause: (callback: () => void) =>
       ipcRenderer.on('tray-playpause', () => callback()),
@@ -117,15 +147,20 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
 
-  plugins: {
-    list: () => ipcRenderer.invoke('plugins-list'),
-    loadCode: (pluginId: string) => ipcRenderer.invoke('plugins-load-code', pluginId),
-    installFromUrl: (url: string) => ipcRenderer.invoke('plugins-install-url', url),
-    installFromFile: (data: ArrayBuffer, filename: string) => 
-      ipcRenderer.invoke('plugins-install-file', data, filename),
-    uninstall: (pluginId: string) => ipcRenderer.invoke('plugins-uninstall', pluginId),
-    getSettings: () => ipcRenderer.invoke('plugins-get-settings'),
-    saveSettings: (settings: object) => ipcRenderer.invoke('plugins-save-settings', settings)
+
+  ytmusic: {
+    login: () => ipcRenderer.invoke('ytmusic-login'),
+    logout: () => ipcRenderer.invoke('ytmusic:logout'),
+    isAuthenticated: () => ipcRenderer.invoke('ytmusic:is-authenticated'),
+    getPlaylists: () => ipcRenderer.invoke('ytmusic:get-playlists'),
+    getPlaylist: (playlistId: string) => ipcRenderer.invoke('ytmusic:get-playlist', playlistId),
+    getHome: () => ipcRenderer.invoke('ytmusic:get-home'),
+    search: (query: string) => ipcRenderer.invoke('ytmusic:search', query),
+    getSong: (videoId: string) => ipcRenderer.invoke('ytmusic:get-song', videoId),
+    getWatchPlaylist: (videoId: string, playlistId?: string, radio?: boolean) =>
+      ipcRenderer.invoke('ytmusic:get-watch-playlist', videoId, playlistId, radio),
+    getSongRelated: (browseId: string) =>
+      ipcRenderer.invoke('ytmusic:get-song-related', browseId),
   }
 })
 

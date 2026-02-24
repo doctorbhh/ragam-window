@@ -22,6 +22,9 @@ interface SpotifyAuthContextType {
   refreshToken: () => Promise<void>
   showSpDcDialog: boolean
   setShowSpDcDialog: (show: boolean) => void
+  isYTMusicAuthenticated: boolean
+  ytmusicLogin: () => Promise<void>
+  ytmusicLogout: () => void
 }
 
 const SpotifyAuthContext = createContext<SpotifyAuthContextType | undefined>(undefined)
@@ -32,6 +35,7 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
   const [spotifyUser, setSpotifyUser] = useState<SpotifyUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [showSpDcDialog, setShowSpDcDialog] = useState(false)
+  const [isYTMusicAuthenticated, setIsYTMusicAuthenticated] = useState(false)
 
   // Fetch user profile using IPC (avoids 429)
   const fetchUserProfile = async (_token: string) => {
@@ -80,6 +84,14 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
           }
         } else {
           console.log('[Auth] No valid session found')
+        }
+
+        // Check YouTube Music session
+        // @ts-ignore
+        const ytmusicAuth = await window.electron.ytmusic.isAuthenticated()
+        if (ytmusicAuth) {
+          console.log('[Auth] Found valid YouTube Music session')
+          setIsYTMusicAuthenticated(true)
         }
       } catch (error) {
         console.error('[Auth] Session check error:', error)
@@ -170,7 +182,28 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
     setSpotifyToken(null)
     setSpotifyUser(null)
     setIsAuthenticated(false)
-    // Note: The actual session file would need to be cleared on the main process
+  }, [])
+
+  // YouTube Music login
+  const ytmusicLogin = useCallback(async () => {
+    try {
+      // @ts-ignore
+      const result = await window.electron.ytmusic.login()
+      if (result?.success) {
+        console.log('[Auth] YouTube Music login successful')
+        setIsYTMusicAuthenticated(true)
+      }
+    } catch (error) {
+      console.error('[Auth] YouTube Music login error:', error)
+      throw error
+    }
+  }, [])
+
+  // YouTube Music logout
+  const ytmusicLogout = useCallback(() => {
+    // @ts-ignore
+    window.electron.ytmusic.logout()
+    setIsYTMusicAuthenticated(false)
   }, [])
 
   // Create user object with display_name for Header.tsx compatibility
@@ -194,7 +227,10 @@ export const SpotifyAuthProvider = ({ children }: { children: ReactNode }) => {
         logout,
         refreshToken,
         showSpDcDialog,
-        setShowSpDcDialog
+        setShowSpDcDialog,
+        isYTMusicAuthenticated,
+        ytmusicLogin,
+        ytmusicLogout
       }}
     >
       {children}

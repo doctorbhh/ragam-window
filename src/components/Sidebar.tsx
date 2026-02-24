@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Home, Search, Library, Plus, Heart, Music, Download, WifiOff } from 'lucide-react'
+import { Home, Search, Library, Plus, Heart, Music, Download, WifiOff, History as HistoryIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -14,8 +14,18 @@ interface SidebarProps {
 
 export function Sidebar({ className }: SidebarProps) {
   const [searchOpen, setSearchOpen] = useState(false)
-  const { isAuthenticated } = useSpotifyAuth()
   const { playlists, likedSongs } = useSpotifyPlaylists()
+  const { isAuthenticated, isYTMusicAuthenticated } = useSpotifyAuth()
+  const [ytPlaylists, setYtPlaylists] = useState<any[]>([])
+
+  useEffect(() => {
+    if (isYTMusicAuthenticated) {
+      // @ts-ignore
+      window.electron.ytmusic.getPlaylists()
+        .then((data: any[]) => setYtPlaylists(data))
+        .catch((e: any) => console.error('Failed to load YT playlists:', e))
+    }
+  }, [isYTMusicAuthenticated])
 
   // --- SHORTCUT: Press 'K' to Search ---
   useEffect(() => {
@@ -126,23 +136,23 @@ export function Sidebar({ className }: SidebarProps) {
               {isAuthenticated ? (
                 playlists.map((playlist) => (
                   <Link key={playlist.id} to={`/playlist/${playlist.id}`} className="block">
-                    <div className="flex items-center gap-2 rounded-md p-3 transition-colors hover:bg-sidebar-accent cursor-pointer">
+                    <div className="flex items-center gap-2 rounded-md p-3 transition-colors hover:bg-sidebar-accent cursor-pointer group">
                       {playlist.images?.[0]?.url ? (
                         <img
                           src={playlist.images[0].url}
                           alt={playlist.name}
-                          className="h-12 w-12 rounded object-cover"
+                          className="h-12 w-12 rounded object-cover shadow-sm group-hover:scale-105 transition-transform duration-300"
                         />
                       ) : (
                         <div className="flex h-12 w-12 items-center justify-center rounded bg-card">
                           <Music className="h-6 w-6 text-muted-foreground" />
                         </div>
                       )}
-                      <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-medium text-foreground truncate">
+                      <div className="flex-1 overflow-hidden min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
                           {playlist.name}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-muted-foreground truncate">
                           {playlist.tracks?.total ? `${playlist.tracks.total} tracks` : 'Playlist'}
                         </p>
                       </div>
@@ -152,6 +162,43 @@ export function Sidebar({ className }: SidebarProps) {
               ) : (
                 <div className="text-center py-8">
                   <p className="text-sm text-muted-foreground">Login to see your playlists</p>
+                </div>
+              )}
+
+              {/* YouTube Music Playlists */}
+              {isYTMusicAuthenticated && ytPlaylists.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="mb-2 px-2 text-xs font-semibold text-muted-foreground tracking-wider uppercase flex items-center gap-2">
+                    <HistoryIcon className="h-3 w-3" /> {/* Using History icon as proxy for YT Music logo/playlist icon if generic */}
+                    YouTube Music
+                  </h3>
+                  <div className="space-y-1">
+                    {ytPlaylists.map((playlist) => (
+                      <Link key={playlist.playlistId || playlist.id} to={`/playlist/${playlist.playlistId || playlist.id}`} className="block">
+                        <div className="flex items-center gap-2 rounded-md p-3 transition-colors hover:bg-sidebar-accent cursor-pointer group">
+                          {playlist.thumbnails?.[0]?.url ? (
+                            <img
+                              src={playlist.thumbnails[playlist.thumbnails.length - 1].url}
+                              alt={playlist.title}
+                              className="h-12 w-12 rounded object-cover shadow-sm group-hover:scale-105 transition-transform duration-300"
+                            />
+                          ) : (
+                            <div className="flex h-12 w-12 items-center justify-center rounded bg-card">
+                              <Music className="h-6 w-6 text-muted-foreground" />
+                            </div>
+                          )}
+                          <div className="flex-1 overflow-hidden min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
+                              {playlist.title}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {playlist.count || 'Playlist'}
+                            </p>
+                          </div>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

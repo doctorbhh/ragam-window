@@ -1,10 +1,28 @@
 import { Sidebar } from './Sidebar'
 import { Player } from './Player'
+import { TitleBar } from './TitleBar'
 import { Outlet } from 'react-router-dom'
+import { useEffect } from 'react'
+import { getTheme } from '@/services/instanceService'
 
 export default function Layout() {
+  useEffect(() => {
+    // Apply saved theme on startup
+    const savedTheme = getTheme()
+    document.documentElement.classList.remove('theme-kdon', 'theme-mello')
+    
+    if (savedTheme === 'kdon') {
+      document.documentElement.classList.add('theme-kdon')
+    } else if (savedTheme === 'mello') {
+      document.documentElement.classList.add('theme-mello')
+    }
+  }, [])
+
   return (
     <div className="flex h-screen flex-col bg-background overflow-hidden">
+      {/* Custom Title Bar */}
+      <TitleBar />
+      
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar visible on medium screens and up */}
         <div className="hidden md:block w-64 border-r border-border/10">
@@ -16,7 +34,7 @@ export default function Layout() {
           {/* FIX: Added 'pb-32' (padding-bottom: 8rem) 
              This ensures the last item in your list scrolls ABOVE the player bar.
           */}
-          <div className="pb-32 min-h-full">
+          <div className="pl-2 pb-32 min-h-full">
             <Outlet />
           </div>
         </main>

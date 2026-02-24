@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Trash2,
   Signal,
@@ -7,14 +7,14 @@ import {
   MapPin,
   HardDrive,
   Volume2,
-  Puzzle,
-  Download,
-  Link,
-  Upload,
-  RefreshCw
+  Infinity,
+  Palette,
+  ChevronRight,
+  Check,
+  Sparkles,
+  Keyboard
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
@@ -46,20 +46,19 @@ import {
   getSearchRegion,
   setSearchRegion,
   getAudioNormalization,
-  setAudioNormalization
+  setAudioNormalization,
+  getTheme,
+  setTheme
 } from '@/services/instanceService'
 import {
   getCacheSettings,
   setCacheSettings,
   getCacheStats,
   clearCache,
-  CacheSettings,
   CacheStats
 } from '@/services/cacheService'
-import { pluginManager } from '@/plugins/PluginManager'
-import { PluginCard } from '@/components/PluginCard'
-import { PluginInstance } from '@/plugins/types'
-import { Input } from '@/components/ui/input'
+import { usePlayer } from '@/context/PlayerContext'
+import { cn } from '@/lib/utils'
 
 const REGIONS = [
   { code: 'US', name: 'United States' },
@@ -73,11 +72,86 @@ const REGIONS = [
   { code: 'BR', name: 'Brazil' }
 ]
 
+// Theme preview cards data
+const THEMES = [
+  { 
+    id: 'default', 
+    name: 'Default Dark', 
+    description: 'Modern dark with Green accents',
+    colors: ['#3aed3aff', '#1e1e2e', '#2d2d3d']
+  },
+  { 
+    id: 'kdon', 
+    name: 'KDON', 
+    description: 'Cyan glass with neon glow',
+    colors: ['#06b6d4', '#0f1729', '#1e293b']
+  },
+  { 
+    id: 'mello', 
+    name: 'MelloStudio', 
+    description: 'Carbon black with red accents',
+    colors: ['#E91E63', '#121212', '#1f1f1f']
+  }
+]
+
+// Setting Row Component - defined outside to prevent re-creation on re-renders
+interface SettingRowProps {
+  icon: any
+  label: string
+  description?: string
+  children: React.ReactNode
+  className?: string
+}
+
+const SettingRow = ({ icon: Icon, label, description, children, className }: SettingRowProps) => (
+  <div className={cn(
+    "group flex items-center justify-between py-4 px-5 rounded-xl",
+    "hover:bg-white/5 border border-transparent hover:border-white/10",
+    className
+  )}>
+    <div className="flex items-center gap-4">
+      <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20">
+        <Icon className="h-5 w-5 text-primary" />
+      </div>
+      <div>
+        <p className="font-medium text-foreground">{label}</p>
+        {description && (
+          <p className="text-sm text-muted-foreground mt-0.5">{description}</p>
+        )}
+      </div>
+    </div>
+    <div className="flex items-center gap-2">
+      {children}
+    </div>
+  </div>
+)
+
+// Toggle Row Component - defined outside to prevent re-creation on re-renders
+interface ToggleRowProps {
+  icon: any
+  label: string
+  description?: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}
+
+const ToggleRow = ({ icon: Icon, label, description, checked, onCheckedChange }: ToggleRowProps) => (
+  <SettingRow icon={Icon} label={label} description={description}>
+    <Switch 
+      checked={checked} 
+      onCheckedChange={onCheckedChange}
+      className="data-[state=checked]:bg-primary"
+    />
+  </SettingRow>
+)
+
 const Settings = () => {
   const [currentQuality, setCurrentQuality] = useState('high')
   const [currentProvider, setCurrentProvider] = useState('youtube')
   const [currentRegion, setCurrentRegion] = useState('IN')
   const [normalizationEnabled, setNormalizationEnabled] = useState(false)
+  const [currentTheme, setCurrentTheme] = useState('default')
+  const { spotifyEndless, ytmusicEndless, toggleSpotifyEndless, toggleYtmusicEndless } = usePlayer()
 
   // Cache state
   const [cacheEnabled, setCacheEnabled] = useState(true)
@@ -85,32 +159,13 @@ const Settings = () => {
   const [cacheStats, setCacheStats] = useState<CacheStats>({ count: 0, sizeBytes: 0, sizeMB: 0 })
   const [cacheLoading, setCacheLoading] = useState(false)
 
-  // Plugin state
-  const [plugins, setPlugins] = useState<PluginInstance[]>([])
-  const [pluginsLoading, setPluginsLoading] = useState(false)
-  const [pluginUrl, setPluginUrl] = useState('')
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
   useEffect(() => {
     setCurrentQuality(getAudioQuality())
     setCurrentProvider(getSearchProvider())
     setCurrentRegion(getSearchRegion())
     setNormalizationEnabled(getAudioNormalization())
+    setCurrentTheme(getTheme())
     loadCacheSettings()
-    
-    // Initialize plugins
-    const initPlugins = async () => {
-      setPluginsLoading(true)
-      try {
-        await pluginManager.initialize()
-        setPlugins(pluginManager.getPlugins())
-      } catch (e) {
-        console.error('Failed to load plugins:', e)
-      } finally {
-        setPluginsLoading(false)
-      }
-    }
-    initPlugins()
   }, [])
 
   const handleQualityChange = (value: string) => {
@@ -137,11 +192,25 @@ const Settings = () => {
     toast.success(`Audio normalization ${enabled ? 'enabled' : 'disabled'}`)
   }
 
+  const handleThemeChange = (value: string) => {
+    setTheme(value)
+    setCurrentTheme(value)
+    document.documentElement.classList.remove('theme-kdon', 'theme-mello')
+    if (value !== 'default') {
+      document.documentElement.classList.add(`theme-${value}`)
+    }
+    const themeNames: Record<string, string> = {
+      default: 'Default',
+      kdon: 'KDON',
+      mello: 'MelloStudio'
+    }
+    toast.success(`Theme set to ${themeNames[value] || 'Default'}`)
+  }
+
   const handleClearData = () => {
     clearAllData()
   }
 
-  // Cache handlers
   const loadCacheSettings = async () => {
     try {
       const settings = await getCacheSettings()
@@ -164,7 +233,6 @@ const Settings = () => {
     const maxSizeMB = parseInt(value)
     setCacheMaxSize(maxSizeMB)
     await setCacheSettings({ maxSizeMB })
-    // Refresh stats after potential eviction
     const stats = await getCacheStats()
     setCacheStats(stats)
     toast.success(`Cache size limit set to ${maxSizeMB} MB`)
@@ -183,399 +251,322 @@ const Settings = () => {
     }
   }
 
-  // Plugin handlers
-  const loadPlugins = async () => {
-    setPluginsLoading(true)
-    try {
-      await pluginManager.initialize()
-      setPlugins(pluginManager.getPlugins())
-    } catch (e) {
-      console.error('Failed to load plugins:', e)
-    } finally {
-      setPluginsLoading(false)
-    }
-  }
-
-  const handlePluginEnable = async (pluginId: string, enabled: boolean) => {
-    await pluginManager.setPluginEnabled(pluginId, enabled)
-    setPlugins(pluginManager.getPlugins())
-    toast.success(enabled ? 'Plugin enabled' : 'Plugin disabled')
-  }
-
-  const handlePluginUninstall = async (pluginId: string) => {
-    const success = await pluginManager.uninstallPlugin(pluginId)
-    if (success) {
-      setPlugins(pluginManager.getPlugins())
-      toast.success('Plugin uninstalled')
-    } else {
-      toast.error('Failed to uninstall plugin')
-    }
-  }
-
-  const handleInstallFromUrl = async () => {
-    if (!pluginUrl.trim()) {
-      toast.error('Please enter a plugin URL')
-      return
-    }
-    
-    setPluginsLoading(true)
-    try {
-      const result = await pluginManager.installPlugin(pluginUrl.trim())
-      if (result.success) {
-        setPlugins(pluginManager.getPlugins())
-        setPluginUrl('')
-        toast.success('Plugin installed successfully')
-      } else {
-        toast.error(result.error || 'Failed to install plugin')
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'Failed to install plugin')
-    } finally {
-      setPluginsLoading(false)
-    }
-  }
-
-  const handleInstallFromFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    
-    setPluginsLoading(true)
-    try {
-      const result = await pluginManager.installPlugin(file)
-      if (result.success) {
-        setPlugins(pluginManager.getPlugins())
-        toast.success('Plugin installed successfully')
-      } else {
-        toast.error(result.error || 'Failed to install plugin')
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'Failed to install plugin')
-    } finally {
-      setPluginsLoading(false)
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-    }
-  }
-
   return (
-    <div className="container mx-auto p-6 max-w-2xl pb-24">
-      <h1 className="text-3xl font-bold mb-6">Settings</h1>
+    <div className="min-h-full pb-32">
+      {/* Header */}
+      <div className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl border-b border-white/5">
+        <div className="max-w-4xl mx-auto px-6 py-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-primary/50 flex items-center justify-center shadow-lg shadow-primary/20">
+              <Sparkles className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+              <p className="text-sm text-muted-foreground">Customize your experience</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <div className="space-y-6">
-        {/* Plugins Section */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Puzzle className="h-5 w-5 text-primary" />
-                <CardTitle>Plugins</CardTitle>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  setPluginsLoading(true)
-                  pluginManager.initialize().then(() => {
-                    setPlugins(pluginManager.getPlugins())
-                    setPluginsLoading(false)
-                  })
-                }}
-                disabled={pluginsLoading}
-              >
-                <RefreshCw className={`h-4 w-4 ${pluginsLoading ? 'animate-spin' : ''}`} />
-              </Button>
-            </div>
-            <CardDescription>
-              Extend functionality with metadata, auth, and streaming plugins.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Install from URL */}
-            <div className="flex gap-2">
-              <Input
-                placeholder="Enter plugin URL..."
-                value={pluginUrl}
-                onChange={(e) => setPluginUrl(e.target.value)}
-                className="flex-1"
-              />
-              <Button 
-                onClick={handleInstallFromUrl} 
-                disabled={pluginsLoading || !pluginUrl.trim()}
-              >
-                <Link className="h-4 w-4 mr-2" />
-                Install
-              </Button>
-            </div>
-
-            {/* Install from file */}
-            <div className="flex gap-2">
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleInstallFromFile}
-                accept=".js,.json,.zip"
-                className="hidden"
-              />
-              <Button
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={pluginsLoading}
-                className="w-full"
-              >
-                <Upload className="h-4 w-4 mr-2" />
-                Install from File
-              </Button>
-            </div>
-
-            {/* Plugin list */}
-            <div className="space-y-3 mt-4">
-              {plugins.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Puzzle className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>No plugins installed</p>
-                  <p className="text-sm mt-1">Install plugins to extend functionality</p>
-                </div>
-              ) : (
-                plugins.map((plugin) => (
-                  <PluginCard
-                    key={plugin.manifest.id}
-                    plugin={plugin}
-                    onEnable={handlePluginEnable}
-                    onUninstall={handlePluginUninstall}
-                  />
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Search Provider Settings */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Globe className="h-5 w-5 text-primary" />
-              <CardTitle>Search Provider</CardTitle>
-            </div>
-            <CardDescription>Choose where to search and fetch songs from.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={currentProvider} onValueChange={handleProviderChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="youtube">YouTube </SelectItem>
-                <SelectItem value="jiosaavn">JioSaavn (Fast & Direct)</SelectItem>
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-
-        {/* Region Settings */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-primary" />
-              <CardTitle>Search Region</CardTitle>
-            </div>
-            <CardDescription>Set your preferred country for search results.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={currentRegion} onValueChange={handleRegionChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select region" />
-              </SelectTrigger>
-              <SelectContent>
-                {REGIONS.map((region) => (
-                  <SelectItem key={region.code} value={region.code}>
-                    {region.name} ({region.code})
-                  </SelectItem>
+      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+        
+        {/* Appearance Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <Palette className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Appearance</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden">
+            {/* Theme Cards */}
+            <div className="p-5">
+              <Label className="text-sm text-muted-foreground mb-4 block">Choose Theme</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {THEMES.map((theme) => (
+                  <button
+                    key={theme.id}
+                    onClick={() => handleThemeChange(theme.id)}
+                    className={cn(
+                      "relative group p-4 rounded-xl border-2 transition-all duration-200 text-left",
+                      "hover:shadow-lg hover:shadow-primary/5",
+                      currentTheme === theme.id 
+                        ? "border-primary bg-primary/10 shadow-lg shadow-primary/10" 
+                        : "border-white/10 hover:border-white/20 bg-white/5"
+                    )}
+                  >
+                    {/* Color Preview */}
+                    <div className="flex gap-1.5 mb-3">
+                      {theme.colors.map((color, i) => (
+                        <div 
+                          key={i}
+                          className="w-6 h-6 rounded-full shadow-inner"
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    </div>
+                    
+                    <p className="font-semibold text-foreground">{theme.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{theme.description}</p>
+                    
+                    {/* Selected indicator */}
+                    {currentTheme === theme.id && (
+                      <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+                        <Check className="h-3.5 w-3.5 text-white" />
+                      </div>
+                    )}
+                  </button>
                 ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-
-        {/* Audio Quality Settings */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Signal className="h-5 w-5 text-primary" />
-              <CardTitle>Audio Quality</CardTitle>
-            </div>
-            <CardDescription>Adjust streaming quality.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={currentQuality} onValueChange={handleQualityChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select quality" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="high">High (Best Audio)</SelectItem>
-                <SelectItem value="medium">Medium (Balanced)</SelectItem>
-                <SelectItem value="low">Low (Data Saver)</SelectItem>
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-
-        {/* Audio Normalization */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Volume2 className="h-5 w-5 text-primary" />
-              <CardTitle>Audio Normalization</CardTitle>
-            </div>
-            <CardDescription>
-              Automatically adjust volume levels so all songs play at similar loudness.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label htmlFor="normalization">Enable normalization</Label>
-                <p className="text-xs text-muted-foreground">
-                  Prevents sudden volume jumps between tracks
-                </p>
               </div>
-              <Switch
-                id="normalization"
-                checked={normalizationEnabled}
-                onCheckedChange={handleNormalizationChange}
-              />
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
-        {/* Audio Cache Settings */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <HardDrive className="h-5 w-5 text-primary" />
-              <CardTitle>Audio Cache</CardTitle>
+        {/* Audio Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <Volume2 className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Audio</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
+            <SettingRow icon={Signal} label="Audio Quality" description="Higher quality uses more data">
+              <Select value={currentQuality} onValueChange={handleQualityChange}>
+                <SelectTrigger className="w-40 bg-white/5 border-white/10">
+                  <SelectValue placeholder="Select quality" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="high">High (320kbps)</SelectItem>
+                  <SelectItem value="medium">Medium (192kbps)</SelectItem>
+                  <SelectItem value="low">Low (128kbps)</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingRow>
+
+            <ToggleRow 
+              icon={Volume2} 
+              label="Audio Normalization" 
+              description="Consistent volume across all tracks"
+              checked={normalizationEnabled}
+              onCheckedChange={handleNormalizationChange}
+            />
+
+            <ToggleRow 
+              icon={Infinity} 
+              label="Spotify Endless Playback" 
+              description="Auto-queue from Spotify recommendations"
+              checked={spotifyEndless}
+              onCheckedChange={toggleSpotifyEndless}
+            />
+
+            <ToggleRow 
+              icon={Infinity} 
+              label="YT Music Endless Playback" 
+              description="Auto-queue from YouTube Music radio"
+              checked={ytmusicEndless}
+              onCheckedChange={toggleYtmusicEndless}
+            />
+          </div>
+        </section>
+
+        {/* Search Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <Globe className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Search & Region</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
+            <SettingRow icon={Globe} label="Search Provider" description="Source for audio streaming">
+              <Select value={currentProvider} onValueChange={handleProviderChange}>
+                <SelectTrigger className="w-44 bg-white/5 border-white/10">
+                  <SelectValue placeholder="Select provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="youtube">YouTube</SelectItem>
+                  <SelectItem value="jiosaavn">JioSaavn</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingRow>
+
+            <SettingRow icon={MapPin} label="Search Region" description="Preferred country for results">
+              <Select value={currentRegion} onValueChange={handleRegionChange}>
+                <SelectTrigger className="w-44 bg-white/5 border-white/10">
+                  <SelectValue placeholder="Select region" />
+                </SelectTrigger>
+                <SelectContent>
+                  {REGIONS.map((region) => (
+                    <SelectItem key={region.code} value={region.code}>
+                      {region.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingRow>
+          </div>
+        </section>
+
+        {/* Shortcuts Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <Keyboard className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Keyboard Shortcuts</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5 p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-6">
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Play / Pause</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">Space</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Next Track</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">Right arrow &rarr;</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Previous Track</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">Left arrow &larr;</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Volume Up</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">Up arrow &uarr;</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Volume Down</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">Down arrow &darr;</kbd>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-foreground">Toggle Mute</span>
+                <kbd className="px-2 py-1 bg-white/10 rounded text-xs font-mono text-muted-foreground border border-white/5 shadow-sm">M</kbd>
+              </div>
+              
             </div>
-            <CardDescription>Cache songs locally for faster playback on repeat plays.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Enable Toggle */}
-            <div className="flex items-center justify-between">
-              <Label htmlFor="cache-toggle" className="flex flex-col gap-1">
-                <span>Enable Cache</span>
-                <span className="text-xs text-muted-foreground font-normal">
-                  Store audio locally for faster playback
-                </span>
-              </Label>
-              <Switch
-                id="cache-toggle"
+          </div>
+        </section>
+
+        {/* Storage Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <HardDrive className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Storage & Cache</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden">
+            <div className="divide-y divide-white/5">
+              <ToggleRow 
+                icon={HardDrive} 
+                label="Audio Cache" 
+                description="Store songs locally for faster playback"
                 checked={cacheEnabled}
                 onCheckedChange={handleCacheToggle}
               />
+
+              <SettingRow icon={HardDrive} label="Max Cache Size" description="Storage limit for cached audio">
+                <Select 
+                  value={cacheMaxSize.toString()} 
+                  onValueChange={handleCacheSizeChange}
+                  disabled={!cacheEnabled}
+                >
+                  <SelectTrigger className="w-32 bg-white/5 border-white/10">
+                    <SelectValue placeholder="Size" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="100">100 MB</SelectItem>
+                    <SelectItem value="250">250 MB</SelectItem>
+                    <SelectItem value="500">500 MB</SelectItem>
+                    <SelectItem value="1024">1 GB</SelectItem>
+                    <SelectItem value="2048">2 GB</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingRow>
             </div>
 
-            {/* Max Size Selector */}
-            <div className="space-y-2">
-              <Label>Maximum Cache Size</Label>
-              <Select
-                value={cacheMaxSize.toString()}
-                onValueChange={handleCacheSizeChange}
-                disabled={!cacheEnabled}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select size" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="100">100 MB</SelectItem>
-                  <SelectItem value="250">250 MB</SelectItem>
-                  <SelectItem value="500">500 MB</SelectItem>
-                  <SelectItem value="1024">1 GB</SelectItem>
-                  <SelectItem value="2048">2 GB</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Usage Display */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Current Usage</span>
-                <span className="font-medium">
-                  {cacheStats.sizeMB} MB / {cacheMaxSize} MB ({cacheStats.count} songs)
+            {/* Cache Usage */}
+            <div className="px-5 py-4 bg-white/[0.02] border-t border-white/5">
+              <div className="flex justify-between text-sm mb-2">
+                <span className="text-muted-foreground">Cache Usage</span>
+                <span className="font-medium text-foreground">
+                  {cacheStats.sizeMB} MB / {cacheMaxSize} MB
+                  <span className="text-muted-foreground ml-2">({cacheStats.count} songs)</span>
                 </span>
               </div>
-              <Progress
-                value={(cacheStats.sizeMB / cacheMaxSize) * 100}
-                className="h-2"
+              <Progress 
+                value={(cacheStats.sizeMB / cacheMaxSize) * 100} 
+                className="h-2 bg-white/10"
               />
+              
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="sm"
+                    className="mt-3 text-muted-foreground hover:text-destructive"
+                    disabled={cacheStats.count === 0 || cacheLoading}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    {cacheLoading ? 'Clearing...' : 'Clear Cache'}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear Audio Cache?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will delete {cacheStats.count} cached songs ({cacheStats.sizeMB} MB).
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleClearCache}>Clear Cache</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
-
-            {/* Clear Cache Button */}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  disabled={cacheStats.count === 0 || cacheLoading}
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  {cacheLoading ? 'Clearing...' : 'Clear Cache'}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Clear Audio Cache?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will delete {cacheStats.count} cached songs ({cacheStats.sizeMB} MB).
-                    Songs will be re-downloaded when played again.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleClearCache}>
-                    Clear Cache
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
         {/* Danger Zone */}
-        <Card className="border-destructive/20 bg-destructive/5">
-          <CardHeader>
-            <div className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              <CardTitle>Danger Zone</CardTitle>
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <AlertTriangle className="h-4 w-4 text-destructive" />
+            <h2 className="text-sm font-semibold text-destructive/70 uppercase tracking-wider">Danger Zone</h2>
+          </div>
+          
+          <div className="bg-destructive/5 rounded-2xl border border-destructive/20 p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-foreground">Reset Everything</p>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Clear all settings, cache, and preferences
+                </p>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Reset All
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will delete all local settings and reset the app. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction 
+                      onClick={handleClearData}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Yes, Reset Everything
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
-            <CardDescription>Irreversible actions regarding your local data.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive" className="w-full sm:w-auto">
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Clear All Data & Reset
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will delete all local settings and reset the app.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleClearData}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    Yes, Clear Everything
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
+
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Search, Play, Music2, Youtube, Disc, ChevronDown, ChevronUp, Loader2, ListMusic, User, LayoutGrid } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Search, Play, Music2, Youtube, Disc, ChevronDown, ChevronUp, Loader2, ListMusic, User, LayoutGrid, Plus, Check, Library } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,7 +16,7 @@ interface SearchDialogProps {
   onClose: () => void
 }
 
-type SearchSource = 'spotify' | 'youtube'
+type SearchSource = 'spotify' | 'youtube' | 'ytmusic'
 
 export function SearchDialog({ open, onClose }: SearchDialogProps) {
   const [query, setQuery] = useState('')
@@ -31,8 +32,29 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
   const [loadingAlbumTracks, setLoadingAlbumTracks] = useState(false)
 
   const { search, searching, searchResults, albumResults, artistResults, playlistResults } = useSpotifySearch()
-  const { isAuthenticated, spotifyToken } = useSpotifyAuth()
+  const { isAuthenticated, spotifyToken, isYTMusicAuthenticated } = useSpotifyAuth()
   const { playTrack, addManyToQueue } = usePlayer()
+  const navigate = useNavigate()
+  
+  // YouTube Music search state
+  const [ytmusicResults, setYtmusicResults] = useState<any[]>([])
+  const [ytmusicSearching, setYtmusicSearching] = useState(false)
+  
+  // Saved playlists state
+  const [savedPlaylistIds, setSavedPlaylistIds] = useState<Set<string>>(new Set())
+  
+  // Load saved playlist IDs on mount
+  useEffect(() => {
+    const loadSavedIds = async () => {
+      try {
+        const savedPlaylists = await window.electron.savedPlaylists.getAll()
+        setSavedPlaylistIds(new Set(savedPlaylists.map(p => p.id)))
+      } catch (e) {
+        console.error('Failed to load saved playlists:', e)
+      }
+    }
+    loadSavedIds()
+  }, [])
 
   // Spotify search
   useEffect(() => {
@@ -64,6 +86,59 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
         }
       } else {
         setYoutubeResults([])
+      }
+    }, 300)
+    return () => clearTimeout(debounceTimer)
+  }, [query, searchSource])
+
+  // YouTube Music search
+  useEffect(() => {
+    if (searchSource !== 'ytmusic') return
+    const debounceTimer = setTimeout(async () => {
+      if (query) {
+        setYtmusicSearching(true)
+        try {
+          // @ts-ignore
+          const results = await window.electron.ytmusic.search(query)
+          const normalized = (Array.isArray(results) ? results : []).map((item: any) => {
+            let artists = [{ id: '', name: 'Unknown' }]
+            if (Array.isArray(item.artists)) {
+               artists = item.artists
+            } else if (typeof item.artists === 'string') {
+               artists = item.artists.split(',').map((name: string) => ({ id: '', name: name.trim() }))
+            }
+
+            let durationMs = item.durationMs || 0
+            if (!durationMs && item.duration) {
+                const parts = item.duration.split(':').map(Number)
+                if (parts.length === 2) durationMs = (parts[0] * 60 + parts[1]) * 1000
+                else if (parts.length === 3) durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000
+            }
+
+            return {
+              id: item.videoId || item.id || Math.random().toString(36),
+              name: item.title || '',
+              duration_ms: durationMs,
+              url: '',
+              uri: `youtube:${item.videoId}`,
+              artists,
+              album: {
+                id: item.album?.id || '',
+                name: item.album?.name || '',
+                images: item.imageUrl ? [{ url: item.imageUrl, height: 300, width: 300 }] : [],
+                artists
+              }
+            }
+          })
+          setYtmusicResults(normalized)
+        } catch (e) {
+          console.error('YouTube Music search failed:', e)
+          setYtmusicResults([])
+        } finally {
+          setYtmusicSearching(false)
+        }
+      } else {
+        setYtmusicResults([])
       }
     }, 300)
     return () => clearTimeout(debounceTimer)
@@ -151,12 +226,12 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
     }
   }
 
-  const isSearching = searchSource === 'spotify' ? searching : youtubeSearching
-  const results = searchSource === 'spotify' ? searchResults : youtubeResults
+  const isSearching = searchSource === 'spotify' ? searching : searchSource === 'youtube' ? youtubeSearching : ytmusicSearching
+  const results = searchSource === 'spotify' ? searchResults : searchSource === 'youtube' ? youtubeResults : ytmusicResults
   const albums = searchSource === 'spotify' ? albumResults : []
   const artists = searchSource === 'spotify' ? artistResults : []
   const playlists = searchSource === 'spotify' ? playlistResults : []
-  const canSearch = searchSource === 'youtube' || isAuthenticated
+  const canSearch = searchSource === 'youtube' || searchSource === 'ytmusic' || isAuthenticated
 
   const chips: { label: string; value: SearchType }[] = [
     { label: 'All', value: 'all' },
@@ -195,13 +270,26 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
                 <Youtube className="h-4 w-4" />
                 YouTube
               </button>
+              {isYTMusicAuthenticated && (
+                <button
+                  onClick={() => setSearchSource('ytmusic')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    searchSource === 'ytmusic'
+                      ? 'bg-[#FF0000] text-white shadow-md'
+                      : 'text-muted-foreground hover:text-white'
+                  }`}
+                >
+                  <Music2 className="h-4 w-4" />
+                  YT Music
+                </button>
+              )}
             </div>
           </div>
           
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder={canSearch ? `Search ${searchSource === 'spotify' ? 'Spotify' : 'YouTube'}...` : 'Please login'}
+              placeholder={canSearch ? `Search ${searchSource === 'spotify' ? 'Spotify' : searchSource === 'youtube' ? 'YouTube' : 'YouTube Music'}...` : 'Please login'}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="pl-10"
@@ -344,20 +432,64 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
                         Playlists
                       </h3>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                        {playlists!.slice(0, searchType === 'all' ? 4 : undefined).map((playlist: any) => (
-                          <div key={playlist.id} className="group cursor-pointer space-y-2">
-                             <div className="aspect-square rounded-md overflow-hidden bg-secondary relative shadow-md">
-                               <img src={playlist.images?.[0]?.url} alt={playlist.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                  <Play className="h-8 w-8 text-white fill-white" />
+                        {playlists!.slice(0, searchType === 'all' ? 4 : undefined).map((playlist: any) => {
+                          const isSaved = savedPlaylistIds.has(playlist.id)
+                          
+                          const handleAddToLibrary = async (e: React.MouseEvent) => {
+                            e.stopPropagation()
+                            if (isSaved) return
+                            
+                            try {
+                              await window.electron.savedPlaylists.add({
+                                id: playlist.id,
+                                name: playlist.name,
+                                description: playlist.description,
+                                imageUrl: playlist.images?.[0]?.url,
+                                ownerName: playlist.owner?.display_name,
+                                trackCount: playlist.tracks?.total
+                              })
+                              setSavedPlaylistIds(prev => new Set([...prev, playlist.id]))
+                            } catch (e) {
+                              console.error('Failed to save playlist:', e)
+                            }
+                          }
+                          
+                          return (
+                            <div 
+                              key={playlist.id} 
+                              className="group cursor-pointer space-y-2"
+                            >
+                               <div 
+                                 className="aspect-square rounded-md overflow-hidden bg-secondary relative shadow-md"
+                                 onClick={() => {
+                                   onClose()
+                                   navigate(`/playlist/${playlist.id}`)
+                                 }}
+                               >
+                                 <img src={playlist.images?.[0]?.url} alt={playlist.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <Play className="h-8 w-8 text-white fill-white" />
+                                 </div>
+                                 {/* Add to Library Button */}
+                                 <button
+                                   onClick={handleAddToLibrary}
+                                   className={`absolute top-2 right-2 p-1.5 rounded-full transition-all z-10 ${
+                                     isSaved 
+                                       ? 'bg-primary text-primary-foreground' 
+                                       : 'bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-primary hover:text-primary-foreground'
+                                   }`}
+                                   title={isSaved ? 'Added to Library' : 'Add to Library'}
+                                 >
+                                   {isSaved ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                                 </button>
                                </div>
-                             </div>
-                             <div>
-                               <p className="font-medium text-sm truncate">{playlist.name}</p>
-                               <p className="text-xs text-muted-foreground truncate">By {playlist.owner?.display_name}</p>
-                             </div>
-                          </div>
-                        ))}
+                               <div>
+                                 <p className="font-medium text-sm truncate">{playlist.name}</p>
+                                 <p className="text-xs text-muted-foreground truncate">By {playlist.owner?.display_name}</p>
+                               </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}

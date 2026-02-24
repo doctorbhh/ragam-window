@@ -4,6 +4,7 @@ import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  base: './',
   plugins: [
     react(),
     electron({
@@ -58,10 +59,7 @@ export default defineConfig({
           if (id.includes('@tanstack')) {
             return 'vendor-query'
           }
-          // Supabase
-          if (id.includes('@supabase')) {
-            return 'vendor-supabase'
-          }
+
           // Other utilities
           if (id.includes('sonner') || 
               id.includes('clsx') || 

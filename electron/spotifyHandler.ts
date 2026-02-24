@@ -37,6 +37,16 @@ export function initSpotifyHandlers() {
     }
   });
 
+  ipcMain.handle('spotify:get-recently-played', async (_, limit = 50) => {
+    try {
+      // @ts-ignore - recentlyPlayed added dynamically
+      return await SpotifyGqlApi.user.recentlyPlayed(limit);
+    } catch (error: any) {
+      console.error('[SpotifyHandler] get-recently-played error:', error.message);
+      throw error;
+    }
+  });
+
   // ============ PLAYLIST ENDPOINTS ============
 
   ipcMain.handle('spotify:get-playlist', async (_, playlistId: string) => {
@@ -93,6 +103,26 @@ export function initSpotifyHandlers() {
       return await SpotifyGqlApi.artist.getTopTracks(artistId);
     } catch (error: any) {
       console.error('[SpotifyHandler] get-artist-top-tracks error:', error.message);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('spotify:get-related-artists', async (_, artistId: string) => {
+    try {
+      return await SpotifyGqlApi.artist.getRelatedArtists(artistId);
+    } catch (error: any) {
+      console.error('[SpotifyHandler] get-related-artists error:', error.message);
+      throw error;
+    }
+  });
+
+  // ============ RECOMMENDATIONS ============
+
+  ipcMain.handle('spotify:get-recommendations', async (_, seeds: any, limit = 10) => {
+    try {
+      return await SpotifyGqlApi.browse.getRecommendations(seeds, limit);
+    } catch (error: any) {
+      console.error('[SpotifyHandler] get-recommendations error:', error.message);
       throw error;
     }
   });
