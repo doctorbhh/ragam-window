@@ -153,6 +153,12 @@ declare global {
         check: (playlistId: string) => Promise<boolean>
       }
 
+      playlistTracks: {
+        get: (playlistId: string) => Promise<any[]>
+        add: (playlistId: string, track: any) => Promise<boolean>
+        remove: (playlistId: string, trackId: string) => Promise<boolean>
+      }
+
       tray: {
         onPlayPause: (callback: () => void) => void
         onNext: (callback: () => void) => void

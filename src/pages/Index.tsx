@@ -25,11 +25,15 @@ const Index = () => {
   const anyAuthenticated = isAuthenticated || isYTMusicAuthenticated
 
   useEffect(() => {
+    const controller = new AbortController()
     if (isAuthenticated && spotifyToken) {
       getHome(spotifyToken).then(sections => {
-        if (sections) setHomeSections(sections)
-      }).catch(err => console.error('Failed to load home sections:', err))
+        if (!controller.signal.aborted && sections) setHomeSections(sections)
+      }).catch(err => {
+        if (!controller.signal.aborted) console.error('Failed to load home sections:', err)
+      })
     }
+    return () => controller.abort()
   }, [isAuthenticated, spotifyToken])
 
   const fetchYTMusicHome = useCallback(() => {
@@ -253,12 +257,10 @@ const Index = () => {
         )}
 
         {/* Playlists Preview */}
-        <div className="space-y-4">
-          <h2 className="text-2xl font-bold text-foreground">
-            {isAuthenticated ? 'Your Playlists' : ''}
-          </h2>
+        {isAuthenticated && (
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold text-foreground">Your Playlists</h2>
 
-          {isAuthenticated ? (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
               {playlists.slice(0, 8).map((playlist) => (
                 <SongCard
@@ -270,14 +272,16 @@ const Index = () => {
                 />
               ))}
             </div>
-          ) : !anyAuthenticated ? (
-            <SetupScreen 
-              onSpotifyLogin={login} 
-              onYTMusicLogin={handleYTMusicLogin} 
-              isYTMusicLoggingIn={isYTMusicLoggingIn} 
-            />
-          ) : null}
-        </div>
+          </div>
+        )}
+
+        {!anyAuthenticated && (
+          <SetupScreen 
+            onSpotifyLogin={login} 
+            onYTMusicLogin={handleYTMusicLogin} 
+            isYTMusicLoggingIn={isYTMusicLoggingIn} 
+          />
+        )}
       </div>
     </div>
   )

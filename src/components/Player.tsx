@@ -10,7 +10,8 @@ import {
   VolumeX,
   Mic2,
   ListMusic,
-  Heart,
+  Plus,
+  Music,
   Loader2,
   Download,
   MonitorPlay,
@@ -28,6 +29,7 @@ import { Slider } from '@/components/ui/slider'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { useState, useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 import { createPortal } from 'react-dom'
 import { usePlayer } from '@/context/PlayerContext'
 import Hls from 'hls.js'
@@ -265,6 +267,7 @@ const VideoModal = ({ trackName, artistName, onClose }: VideoModalProps) => {
                     <div className="h-12 w-20 shrink-0 overflow-hidden rounded-md bg-black relative">
                       <img
                         src={video.thumbnail}
+                        alt={video.title || 'Video thumbnail'}
                         className="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                       />
                     </div>
@@ -389,7 +392,10 @@ export function Player() {
     clearQueue
   } = usePlayer()
 
-  const [isLiked, setIsLiked] = useState(false)
+  const [playerPlaylistOpen, setPlayerPlaylistOpen] = useState(false)
+  const [playerPlaylists, setPlayerPlaylists] = useState<any[]>([])
+  const [playerShowNameInput, setPlayerShowNameInput] = useState(false)
+  const [playerNewName, setPlayerNewName] = useState('')
   const [localProgress, setLocalProgress] = useState([0])
   const [localVolume, setLocalVolume] = useState([volume * 100])
   const [isVideoOpen, setIsVideoOpen] = useState(false)
@@ -803,14 +809,88 @@ export function Player() {
                       {currentTrack.artists?.map((a: any) => a.name).join(', ')}
                     </p>
                   </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className={`hidden sm:flex h-9 w-9 shrink-0 hover:bg-white/10 rounded-full transition-colors ${isLiked ? 'text-primary' : 'text-muted-foreground'}`}
-                    onClick={() => setIsLiked(!isLiked)}
-                  >
-                    <Heart className={`h-5 w-5 ${isLiked ? 'fill-current' : ''}`} />
-                  </Button>
+                  <Popover open={playerPlaylistOpen} onOpenChange={(open) => { setPlayerPlaylistOpen(open); if (!open) { setPlayerShowNameInput(false); setPlayerNewName('') } }}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="hidden sm:flex h-9 w-9 shrink-0 hover:bg-white/10 rounded-full transition-colors text-muted-foreground"
+                        onClick={async () => {
+                          try {
+                            const saved = await window.electron.savedPlaylists.getAll()
+                            setPlayerPlaylists((saved || []).filter((p: any) => p.id?.startsWith('local-')))
+                          } catch { setPlayerPlaylists([]) }
+                        }}
+                        aria-label="Add to playlist"
+                      >
+                        <Plus className="h-5 w-5" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-56 p-0 bg-popover border border-border/10 shadow-xl rounded-xl" align="start">
+                      <div className="p-2 border-b border-border/10">
+                        <p className="text-xs font-semibold text-foreground px-1">Add to Playlist</p>
+                      </div>
+                      <div className="p-1 max-h-48 overflow-y-auto">
+                        {playerShowNameInput ? (
+                          <div className="px-2 py-1.5">
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder="Playlist name..."
+                              value={playerNewName}
+                              onChange={(e) => setPlayerNewName(e.target.value)}
+                              onKeyDown={async (e) => {
+                                if (e.key === 'Enter' && currentTrack) {
+                                  const name = playerNewName.trim() || `My Playlist ${new Date().toLocaleDateString()}`
+                                  const newId = `local-${Date.now()}`
+                                  await window.electron.savedPlaylists.add({ id: newId, name, description: '', imageUrl: currentTrack.album?.images?.[0]?.url, trackCount: 1 })
+                                  await window.electron.playlistTracks.add(newId, { id: currentTrack.id, name: currentTrack.name, uri: currentTrack.uri, duration_ms: currentTrack.duration_ms, artists: currentTrack.artists, album: currentTrack.album, external_urls: currentTrack.external_urls })
+                                  toast.success(`Created "${name}" with "${currentTrack.name}"`)
+                                  setPlayerNewName(''); setPlayerShowNameInput(false); setPlayerPlaylistOpen(false)
+                                }
+                              }}
+                              className="w-full bg-accent/50 border border-border/20 rounded-lg px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                            <div className="flex gap-1 mt-1">
+                              <Button size="sm" variant="ghost" className="h-6 text-xs flex-1" onClick={() => { setPlayerShowNameInput(false); setPlayerNewName('') }}>Cancel</Button>
+                              <Button size="sm" className="h-6 text-xs flex-1" onClick={async () => {
+                                if (!currentTrack) return
+                                const name = playerNewName.trim() || `My Playlist ${new Date().toLocaleDateString()}`
+                                const newId = `local-${Date.now()}`
+                                await window.electron.savedPlaylists.add({ id: newId, name, description: '', imageUrl: currentTrack.album?.images?.[0]?.url, trackCount: 1 })
+                                await window.electron.playlistTracks.add(newId, { id: currentTrack.id, name: currentTrack.name, uri: currentTrack.uri, duration_ms: currentTrack.duration_ms, artists: currentTrack.artists, album: currentTrack.album, external_urls: currentTrack.external_urls })
+                                toast.success(`Created "${name}" with "${currentTrack.name}"`)
+                                setPlayerNewName(''); setPlayerShowNameInput(false); setPlayerPlaylistOpen(false)
+                              }}>Create</Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setPlayerShowNameInput(true)}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-foreground hover:bg-accent/50 rounded-lg transition-colors text-left"
+                          >
+                            <Plus className="h-3.5 w-3.5 text-primary" />
+                            New Playlist
+                          </button>
+                        )}
+                        {playerPlaylists.map((pl: any) => (
+                          <button
+                            key={pl.id}
+                            onClick={async () => {
+                              if (!currentTrack) return
+                              await window.electron.playlistTracks.add(pl.id, { id: currentTrack.id, name: currentTrack.name, uri: currentTrack.uri, duration_ms: currentTrack.duration_ms, artists: currentTrack.artists, album: currentTrack.album, external_urls: currentTrack.external_urls })
+                              toast.success(`Added "${currentTrack.name}" to ${pl.name}`)
+                              setPlayerPlaylistOpen(false)
+                            }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-foreground hover:bg-accent/50 rounded-lg transition-colors text-left"
+                          >
+                            <Music className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="truncate">{pl.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </>
               ) : (
                 <div className="flex items-center gap-3 opacity-50">
@@ -831,6 +911,7 @@ export function Player() {
                   variant="ghost"
                   className={`h-8 w-8 text-muted-foreground hover:text-white hover:bg-transparent transition-colors ${isShuffled ? 'text-primary' : ''}`}
                   onClick={toggleShuffle}
+                  aria-label={isShuffled ? 'Disable shuffle' : 'Enable shuffle'}
                 >
                   <Shuffle className="h-4 w-4" />
                 </Button>
@@ -841,6 +922,7 @@ export function Player() {
                   className="h-9 w-9 text-white/80 hover:text-white hover:bg-white/5 rounded-full"
                   onClick={previousTrack}
                   disabled={!currentTrack}
+                  aria-label="Previous track"
                 >
                   <SkipBack className="h-5 w-5" />
                 </Button>
@@ -850,13 +932,14 @@ export function Player() {
                   className="h-10 w-10 sm:h-12 sm:w-12 rounded-full bg-primary text-primary-foreground hover:scale-105 hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 transition-all active:scale-95"
                   onClick={togglePlayPause}
                   disabled={!currentTrack || isLoading}
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
                 >
                   {isLoading ? (
                     <Loader2 className="h-5 w-5 sm:h-6 sm:w-6 animate-spin" />
                   ) : isPlaying ? (
-                    <Pause className="h-5 w-5 sm:h-6 sm:w-6 fill-current" />
+                    <Pause className="h-5 w-5 sm:h-6 sm:w-6 fill-current transition-transform duration-150 scale-100" />
                   ) : (
-                    <Play className="h-5 w-5 sm:h-6 sm:w-6 fill-current ml-1" />
+                    <Play className="h-5 w-5 sm:h-6 sm:w-6 fill-current ml-1 transition-transform duration-150 scale-100" />
                   )}
                 </Button>
 
@@ -866,6 +949,7 @@ export function Player() {
                   className="h-9 w-9 text-white/80 hover:text-white hover:bg-white/5 rounded-full"
                   onClick={nextTrack}
                   disabled={!currentTrack}
+                  aria-label="Next track"
                 >
                   <SkipForward className="h-5 w-5" />
                 </Button>
@@ -875,6 +959,7 @@ export function Player() {
                   variant="ghost"
                   className={`h-8 w-8 text-muted-foreground hover:text-white hover:bg-transparent transition-colors ${repeatMode !== 'off' ? 'text-primary' : ''}`}
                   onClick={toggleRepeat}
+                  aria-label={repeatMode === 'off' ? 'Enable repeat' : repeatMode === 'one' ? 'Disable repeat' : 'Repeat one'}
                 >
                   {repeatMode === 'one' ? (
                     <Repeat1 className="h-4 w-4" />
@@ -904,7 +989,7 @@ export function Player() {
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full"
-                      title="Sources"
+                      aria-label="Audio sources"
                     >
                       <ListVideo className="h-4 w-4" />
                     </Button>
@@ -1022,7 +1107,7 @@ export function Player() {
                     setIsVideoOpen(true)
                     if (isPlaying) togglePlayPause()
                   }}
-                  title={isLoading ? "Please wait for audio to load" : "Watch Video"}
+                  aria-label={isLoading ? 'Please wait for audio to load' : 'Watch video'}
                   disabled={isLoading}
                 >
                   <MonitorPlay className="h-4 w-4" />
@@ -1043,6 +1128,7 @@ export function Player() {
                     variant="ghost"
                     className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full"
                     disabled={!currentTrack}
+                    aria-label="Lyrics"
                   >
                     <Mic2 className="h-4 w-4" />
                   </Button>
@@ -1083,24 +1169,32 @@ export function Player() {
                         <div className="mt-6 flex flex-col items-center gap-4 w-full">
                           {/* Control Buttons */}
                           <div className="flex items-center gap-4">
-                            <button
+                            <Button
+                              size="icon"
+                              variant="ghost"
                               onClick={previousTrack}
-                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10"
+                              aria-label="Previous track"
                             >
                               <SkipBack className="h-5 w-5" />
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              size="icon"
                               onClick={togglePlayPause}
-                              className="p-3 rounded-full bg-white text-black hover:scale-105 transition-transform"
+                              className="p-3 h-auto w-auto rounded-full bg-white text-black hover:scale-105"
+                              aria-label={isPlaying ? 'Pause' : 'Play'}
                             >
                               {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 ml-0.5" />}
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
                               onClick={nextTrack}
-                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10"
+                              aria-label="Next track"
                             >
                               <SkipForward className="h-5 w-5" />
-                            </button>
+                            </Button>
                           </div>
                           
                           {/* Progress Bar */}
@@ -1359,7 +1453,7 @@ export function Player() {
                     size="icon"
                     variant="ghost"
                     className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full"
-                    title="Queue"
+                    aria-label="Queue"
                   >
                     <ListMusic className="h-4 w-4" />
                   </Button>
@@ -1431,6 +1525,7 @@ export function Player() {
                 className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-white/10 rounded-full hidden sm:flex"
                 onClick={() => currentTrack && downloadTrack(currentTrack)}
                 disabled={!currentTrack}
+                aria-label="Download"
               >
                 <Download className="h-4 w-4" />
               </Button>
@@ -1441,6 +1536,7 @@ export function Player() {
                   size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-white"
                   onClick={toggleMute}
+                  aria-label={volume === 0 ? 'Unmute' : 'Mute'}
                 >
                   {volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                 </Button>
@@ -1451,6 +1547,7 @@ export function Player() {
                     max={100}
                     step={1}
                     className="w-20"
+                    aria-label="Volume"
                   />
                 </div>
               </div>

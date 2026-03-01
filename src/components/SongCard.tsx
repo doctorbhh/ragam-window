@@ -52,7 +52,7 @@ export function SongCard({
   return (
     <div
       className={cn(
-        'group relative cursor-pointer overflow-hidden rounded-lg bg-card p-3 transition-all hover:bg-accent/50',
+        'group relative cursor-pointer overflow-hidden rounded-lg bg-card p-3 transition-all hover:bg-accent/50 hover:scale-[1.02]',
         className
       )}
       onClick={handleClick}

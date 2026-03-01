@@ -7,7 +7,14 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-const SESSION_FILE = path.join(app.getPath('userData'), 'spotify-session.json');
+// Lazy getter — defers app.getPath() until first use (after app.whenReady)
+let _sessionFile: string | null = null;
+const getSessionFile = () => {
+  if (!_sessionFile) {
+    _sessionFile = path.join(app.getPath('userData'), 'spotify-session.json');
+  }
+  return _sessionFile;
+};
 const NUANCE_URL = 'https://gist.githubusercontent.com/saraansx/a622d4c1a12c36afdcf701201e9482a3/raw/9afe2c9c7d1a5eb3f7a05d0002a94f45b73682d0/nuance.json';
 
 interface SpotifySession {
@@ -54,8 +61,8 @@ export class SpotifyAuthEndpoint extends EventEmitter {
 
   private _loadSession(): void {
     try {
-      if (fs.existsSync(SESSION_FILE)) {
-        const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8')) as SpotifySession;
+      if (fs.existsSync(getSessionFile())) {
+        const data = JSON.parse(fs.readFileSync(getSessionFile(), 'utf-8')) as SpotifySession;
         this._spDc = data.spDcCookie;
         this._accessToken = data.accessToken;
         this._expiration = data.expiration;
@@ -78,7 +85,7 @@ export class SpotifyAuthEndpoint extends EventEmitter {
         expiration: this._expiration,
         savedAt: Date.now()
       };
-      fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+      fs.writeFileSync(getSessionFile(), JSON.stringify(session, null, 2));
     } catch (error) {
       console.error('[SpotifyAuth] Failed to save session:', error);
     }
@@ -142,8 +149,8 @@ export class SpotifyAuthEndpoint extends EventEmitter {
     this._accessToken = null;
     this._expiration = 0;
     try {
-      if (fs.existsSync(SESSION_FILE)) {
-        fs.unlinkSync(SESSION_FILE);
+      if (fs.existsSync(getSessionFile())) {
+        fs.unlinkSync(getSessionFile());
       }
     } catch {}
     this.emit('logout');

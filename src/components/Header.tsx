@@ -29,7 +29,7 @@ export function Header() {
             variant="ghost"
             className="h-8 w-8 rounded-full bg-background/50 hover:bg-accent"
             onClick={() => navigate(-1)}
-            title="Go Back"
+            aria-label="Go back"
           >
             <ChevronLeft className="h-5 w-5" />
           </Button>
@@ -38,7 +38,7 @@ export function Header() {
             variant="ghost"
             className="h-8 w-8 rounded-full bg-background/50 hover:bg-accent"
             onClick={() => navigate(1)}
-            title="Go Forward"
+            aria-label="Go forward"
           >
             <ChevronRight className="h-5 w-5" />
           </Button>
@@ -52,7 +52,7 @@ export function Header() {
             size="icon"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => navigate('/settings')}
-            title="Settings"
+            aria-label="Settings"
           >
             <Settings className="h-5 w-5" />
           </Button>
@@ -78,11 +78,6 @@ export function Header() {
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate('/settings')}>
-                  <Settings className="mr-2 h-4 w-4" />
-                  Settings
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={logout}
                   className="text-destructive focus:text-destructive"
@@ -96,7 +91,7 @@ export function Header() {
             <Button
               onClick={login}
               size="sm"
-              className="bg-[#1DB954] hover:bg-[#1DB954]/90 text-white font-bold rounded-full px-6"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-full px-6"
             >
               Log in
             </Button>

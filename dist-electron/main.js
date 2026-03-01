@@ -1,6 +1,4250 @@
-"use strict";const f=require("electron"),S=require("node:path"),w=require("node:fs"),Ce=require("node:http"),re=require("child_process"),Qe=require("events"),Me=require("path"),U=require("fs"),Pe=require("crypto"),Je=require("node:https");function be(s){const t=Object.create(null,{[Symbol.toStringTag]:{value:"Module"}});if(s){for(const e in s)if(e!=="default"){const r=Object.getOwnPropertyDescriptor(s,e);Object.defineProperty(t,e,r.get?r:{enumerable:!0,get:()=>s[e]})}}return t.default=s,Object.freeze(t)}const ze=be(Me),J=be(U),Ke=be(Pe),j=Me.join(f.app.getPath("userData"),"spotify-session.json"),Xe="https://gist.githubusercontent.com/saraansx/a622d4c1a12c36afdcf701201e9482a3/raw/9afe2c9c7d1a5eb3f7a05d0002a94f45b73682d0/nuance.json";class Ze extends Qe.EventEmitter{_spDc=null;_accessToken=null;_expiration=0;_nuance=null;constructor(){super(),this._loadSession()}get accessToken(){return this._accessToken}get expiration(){return this._expiration}get spDc(){return this._spDc}_loadSession(){try{if(U.existsSync(j)){const t=JSON.parse(U.readFileSync(j,"utf-8"));this._spDc=t.spDcCookie,this._accessToken=t.accessToken,this._expiration=t.expiration,this.isAuthenticated()&&(console.log("[SpotifyAuth] Recovered session from disk"),this.emit("recovered"))}}catch(t){console.error("[SpotifyAuth] Failed to load session:",t)}}_saveSession(){try{const t={spDcCookie:this._spDc||"",accessToken:this._accessToken||"",expiration:this._expiration,savedAt:Date.now()};U.writeFileSync(j,JSON.stringify(t,null,2))}catch(t){console.error("[SpotifyAuth] Failed to save session:",t)}}isAuthenticated(){return!!this._accessToken&&this._expiration>Date.now()}async loginWithSpDc(t){try{this._spDc=t,console.log("[SpotifyAuth] Starting TOTP login..."),this._nuance||await this._fetchNuance();const e=await this._getServerTime(),r=this._generateTotp(e);console.log(`[SpotifyAuth] Using TOTP v${this._nuance?.v||0}...`);const n=await this._fetchToken(r);if(n.accessToken)return this._accessToken=n.accessToken,this._expiration=n.accessTokenExpirationTimestampMs||Date.now()+36e5,this._saveSession(),this.emit("login",{accessToken:this._accessToken}),console.log("[SpotifyAuth] Login successful!"),{success:!0,accessToken:this._accessToken??void 0,expiration:this._expiration};throw new Error(n.error||"No access token in response")}catch(e){return console.error("[SpotifyAuth] Login failed:",e.message),{success:!1,error:e.message}}}async refreshCredentials(){return this._spDc?this.loginWithSpDc(this._spDc):{success:!1,error:"No sp_dc cookie stored"}}logout(){this._spDc=null,this._accessToken=null,this._expiration=0;try{U.existsSync(j)&&U.unlinkSync(j)}catch{}this.emit("logout")}async _fetchNuance(){try{const t=(await Promise.resolve().then(()=>require("./index-CJj3cZv8.js"))).default,e=await t(Xe,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}});if(!e.ok)throw new Error(`Failed to fetch nuance: ${e.status}`);const r=await e.json();r.sort((o,i)=>(i.v||0)-(o.v||0));const n=r[0];if(n&&n.s)this._nuance={v:n.v||1,s:n.s},console.log(`[SpotifyAuth] Nuance fetched: v${this._nuance.v}`);else throw new Error("Invalid nuance format")}catch(t){console.warn("[SpotifyAuth] Nuance fetch failed, using fallback:",t.message),this._nuance={v:5,s:"GVPZVYTFNAZ27PYEXKQ7X5YAFGC3CHBD"}}}async _getServerTime(){try{const t=(await Promise.resolve().then(()=>require("./index-CJj3cZv8.js"))).default,e=await t("https://open.spotify.com/api/server-time",{headers:{Cookie:`sp_dc=${this._spDc}`,"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}});if(e.ok)return(await e.json()).serverTime||Math.floor(Date.now()/1e3)}catch{}return Math.floor(Date.now()/1e3)}_generateTotp(t){const e=this._nuance?.s||"GVPZVYTFNAZ27PYEXKQ7X5YAFGC3CHBD",r=Math.floor(t/30),n="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";let o="";for(const p of e.toUpperCase()){const m=n.indexOf(p);m>=0&&(o+=m.toString(2).padStart(5,"0"))}const i=Buffer.alloc(Math.floor(o.length/8));for(let p=0;p<i.length;p++)i[p]=parseInt(o.substring(p*8,(p+1)*8),2);const a=Buffer.alloc(8);a.writeBigInt64BE(BigInt(r));const c=Pe.createHmac("sha1",i);c.update(a);const l=c.digest(),u=l[l.length-1]&15;return(((l[u]&127)<<24|(l[u+1]&255)<<16|(l[u+2]&255)<<8|l[u+3]&255)%1e6).toString().padStart(6,"0")}async _fetchToken(t){const e=this._nuance?.v||5,r=`https://open.spotify.com/api/token?reason=transport&productType=web-player&totp=${t}&totpServer=${t}&totpVer=${e}`;return console.log(`[SpotifyAuth] Fetching token from: /api/token?...totpVer=${e}`),new Promise((n,o)=>{const i=f.net.request({method:"GET",url:r,useSessionCookies:!1});i.setHeader("Cookie",`sp_dc=${this._spDc}`),i.setHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),i.setHeader("Accept","application/json"),i.setHeader("Accept-Language","en-US,en;q=0.9"),i.setHeader("Referer","https://open.spotify.com/"),i.setHeader("Origin","https://open.spotify.com");let a="";i.on("response",c=>{if(c.statusCode!==200){let l="";c.on("data",u=>{l+=u.toString()}),c.on("end",()=>{console.error("[SpotifyAuth] Token error:",c.statusCode,l.substring(0,200)),o(new Error(`Token fetch failed: HTTP ${c.statusCode}`))});return}c.on("data",l=>{a+=l.toString()}),c.on("end",()=>{try{const l=JSON.parse(a);l.accessToken&&console.log("[SpotifyAuth] Got access token, length:",l.accessToken.length),n(l)}catch{o(new Error("Failed to parse token response"))}})}),i.on("error",c=>{o(c)}),i.end()})}}const B=new Ze,et="https://api-partner.spotify.com/pathfinder/v1/query",tt="https://api.spotify.com/v1",E={profileAttributes:"53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",fetchLibraryTracks:"087278b20b743578a6262c2b0b4bcd20d879c503cc359a2285baf083ef944240",libraryV3:"2de10199b2441d6e4ae875f27d2db361020c399fb10b03951120223fbed10b08",fetchPlaylist:"bb67e0af06e8d6f52b531f97468ee4acd44cd0f82b988e15c2ea47b1148efc77",getAlbum:"b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10",getTrack:"612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294",queryArtistOverview:"446130b4a0aa6522a686aafccddb0ae849165b5e0436fd802f96e0243617b5d8",searchDesktop:"4801118d4a100f756e833d33984436a3899cff359c532f8fd3aaf174b60b3b49",searchTracks:"bc1ca2fcd0ba1013a0fc88e6cc4f190af501851e3dafd3e1ef85840297694428",searchAlbums:"a71d2c993fc98e1c880093738a55a38b57e69cc4ce5a8c113e6c5920f9513ee2",isCurated:"e4ed1f91a2cc5415befedb85acf8671dc1a4bf3ca1a5b945a6386101a22e28a6",addToLibrary:"a3c1ff58e6a36fec5fe1e3a193dc95d9071d96b9ba53c5ba9c1494fb1ee73915",removeFromLibrary:"a3c1ff58e6a36fec5fe1e3a193dc95d9071d96b9ba53c5ba9c1494fb1ee73915",home:"d62af2714f2623c923cc9eeca4b9545b4363abaa9188a9e94e2b63b823419a2c"};async function v(s,t,e={}){const r=B.accessToken;if(!r)throw new Error("Not authenticated");const n=JSON.stringify({variables:e,operationName:s,extensions:{persistedQuery:{version:1,sha256Hash:t}}});return new Promise((o,i)=>{const a=f.net.request({method:"POST",url:et});a.setHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),a.setHeader("Authorization",`Bearer ${r}`),a.setHeader("Content-Type","application/json"),a.setHeader("Accept","application/json"),a.setHeader("Origin","https://open.spotify.com"),a.setHeader("Referer","https://open.spotify.com/"),a.setHeader("Sec-Fetch-Dest","empty"),a.setHeader("Sec-Fetch-Mode","cors"),a.setHeader("Sec-Fetch-Site","same-site"),a.setHeader("app-platform","WebPlayer"),a.setHeader("spotify-app-version","1.2.30.290.g183057e9");let c="";a.on("response",l=>{l.on("data",u=>{c+=u.toString()}),l.on("end",()=>{try{const u=JSON.parse(c);u.errors?(console.error("[GQL] Error:",u.errors[0]?.message),i(new Error(u.errors[0]?.message||"GraphQL error"))):o(u)}catch{i(new Error("Failed to parse GraphQL response"))}})}),a.on("error",i),a.write(n),a.end()})}async function oe(s,t=3){const e=B.accessToken;if(!e)throw new Error("Not authenticated");return new Promise((r,n)=>{const o=f.net.request({method:"GET",url:`${tt}${s}`});o.setHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),o.setHeader("Authorization",`Bearer ${e}`),o.setHeader("Accept","application/json"),o.setHeader("Origin","https://open.spotify.com"),o.setHeader("Referer","https://open.spotify.com/"),o.setHeader("Sec-Fetch-Dest","empty"),o.setHeader("Sec-Fetch-Mode","cors"),o.setHeader("Sec-Fetch-Site","same-site"),o.setHeader("app-platform","WebPlayer"),o.setHeader("spotify-app-version","1.2.30.290.g183057e9");let i="";o.on("response",a=>{a.on("data",c=>{i+=c.toString()}),a.on("end",()=>{try{if(a.statusCode===429&&t>0){const l=parseInt(a.headers["retry-after"]||"1",10);console.warn(`[API] Rate Limited (429). Retrying after ${l}s...`),setTimeout(()=>{oe(s,t-1).then(r).catch(n)},l*1e3);return}const c=JSON.parse(i);if(c.error){if(c.error.status===429&&t>0){console.warn("[API] Rate Limited (JSON 429). Retrying..."),setTimeout(()=>{oe(s,t-1).then(r).catch(n)},2e3);return}console.error("[API] Request failed:",c.error),n(new Error(c.error.message||`API Error ${c.error.status}`));return}r(c)}catch{n(new Error("Failed to parse API response"))}})}),o.on("error",a=>{console.error("[API] Network Error:",a),n(a)}),o.end()})}async function st(){const t=(await v("profileAttributes",E.profileAttributes,{})).data?.me?.profile;if(!t)throw new Error("Failed to get user profile");const e=t.uri?.split(":").pop();return{id:e,display_name:t.name,email:"unknown",images:t.avatar?.sources||[],uri:t.uri,external_urls:{spotify:`https://open.spotify.com/user/${e}`},type:"user"}}async function rt(s=0,t=20){const r=(await v("fetchLibraryTracks",E.fetchLibraryTracks,{offset:s,limit:t})).data?.me?.library;if(!r)throw new Error("Failed to get saved tracks");const n=r.tracks?.items?.map(o=>{const i=o.track?.data;if(!i)return null;const a=o.track?._uri?.split(":").pop(),c=i.artists?.items?.map(d=>{const p=d.uri?.split(":").pop();return{id:p,name:d.profile?.name,uri:d.uri,external_urls:{spotify:`https://open.spotify.com/artist/${p}`}}})||[],l=i.albumOfTrack?.uri?.split(":").pop(),u=i.duration?.totalMilliseconds||0;return{track:{id:a,name:i.name,uri:`spotify:track:${a}`,duration_ms:u,artists:c,album:{id:l,name:i.albumOfTrack?.name,images:i.albumOfTrack?.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${l}`}},external_urls:{spotify:`https://open.spotify.com/track/${a}`}}}}).filter(Boolean)||[];return{items:n,total:r.tracks?.totalCount||0,offset:s,limit:t,next:n.length===t?`offset=${s+t}`:null}}async function nt(s=0,t=20){const r=(await v("libraryV3",E.libraryV3,{filters:["Playlists"],order:null,textFilter:"",features:["LIKED_SONGS","YOUR_EPISODES_V2","PRERELEASES","EVENTS"],limit:t,offset:s,flatten:!1,expandedFolders:[],folderUri:null,includeFoldersWhenFlattening:!0})).data?.me?.libraryV3;if(!r)throw new Error("Failed to get playlists");return{items:r.items?.filter(o=>o.item?.__typename==="PlaylistResponseWrapper"&&o.item?.data?.__typename==="Playlist").map(o=>{const i=o.item?._uri?.split(":").pop(),a=o.item?.data,c=a?.ownerV2?.data;return{id:i,name:a?.name,description:a?.description,images:a?.images?.items?.flatMap(l=>l.sources)||[],uri:o.item?._uri,external_urls:{spotify:`https://open.spotify.com/playlist/${i}`},owner:{id:c?.id,display_name:c?.name,uri:c?.uri,images:c?.avatar?.sources||[]},tracks:{total:0}}})||[],total:r.totalCount||0,offset:r.pagingInfo?.offset||s,limit:r.pagingInfo?.limit||t}}async function ot(s){const e=(await v("fetchPlaylist",E.fetchPlaylist,{uri:`spotify:playlist:${s}`,offset:0,limit:25,enableWatchFeedEntrypoint:!0})).data?.playlistV2;if(!e)throw new Error("Failed to get playlist");const r=e.ownerV2?.data;return{id:s,name:e.name,description:e.description,collaborative:(e.members?.items?.length||0)>1,public:!0,images:e.images?.items?.[0]?.sources||[],uri:`spotify:playlist:${s}`,external_urls:{spotify:`https://open.spotify.com/playlist/${s}`},owner:{id:r?.uri?.split(":").pop(),display_name:r?.name,uri:r?.uri,images:r?.avatar?.sources||[]},followers:e.followers,tracks:{total:e.content?.totalCount||0}}}async function it(s,t=0,e=25){const n=(await v("fetchPlaylist",E.fetchPlaylist,{uri:`spotify:playlist:${s}`,offset:t,limit:e,enableWatchFeedEntrypoint:!1})).data?.playlistV2;if(!n)throw new Error("Failed to get playlist tracks");const o=n.content?.items?.map(i=>{const a=i.itemV2?.data;if(!a)return null;Math.random()<.05&&(console.log("[GQL] Playlist Track Item Keys:",Object.keys(a)),console.log("[GQL] Playlist Track Duration:",JSON.stringify(a.duration)));const c=a.uri?.split(":").pop(),l=a.artists?.items?.map(p=>{const m=p.uri?.split(":").pop();return{id:m,uri:p.uri,name:p.profile?.name,external_urls:{spotify:`https://open.spotify.com/artist/${m}`}}})||[],u=a.albumOfTrack?.uri?.split(":").pop(),d=a.duration?.totalMilliseconds||a.trackDuration?.totalMilliseconds||0;return{id:c,uri:a.uri,name:a.name,album:{album_type:"album",id:u,name:a.albumOfTrack?.name,images:a.albumOfTrack?.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${u}`},artists:[l[0]]},artists:l,duration_ms:d,external_urls:{spotify:`https://open.spotify.com/track/${c}`}}}).filter(Boolean)||[];return{items:o.map(i=>({track:i})),total:n.content?.totalCount||0,offset:t,limit:e,next:o.length===e?`offset=${t+e}`:null}}async function at(s,t=0,e=10){const n=(await v("searchDesktop",E.searchDesktop,{searchTerm:s,offset:t,limit:e,numberOfTopResults:5,includeAudiobooks:!1,includeArtistHasConcertsField:!1,includePreReleases:!1,includeLocalConcertsField:!1,includeAuthors:!1})).data?.searchV2;if(!n)throw new Error("Search failed");return{tracks:$e(n.tracksV2?.items||[]),albums:Le(n.albumsV2?.items||[]),artists:De(n.artists?.items||[]),playlists:He(n.playlists?.items||[])}}async function ct(s,t=0,e=20){const n=(await v("searchTracks",E.searchTracks,{searchTerm:s,offset:t,limit:e,numberOfTopResults:20,includeAudiobooks:!0,includeAuthors:!1,includePreReleases:!1})).data?.searchV2?.tracksV2;if(!n)throw new Error("Track search failed");return{tracks:{items:$e(n.items||[])},total:n.totalCount||0,offset:n.pagingInfo?.nextOffset||t,limit:n.pagingInfo?.limit||e}}async function lt(s,t=0,e=20){const n=(await v("searchAlbums",E.searchAlbums,{searchTerm:s,offset:t,limit:e,numberOfTopResults:20,includeAudiobooks:!1,includeAuthors:!1,includePreReleases:!1})).data?.searchV2?.albumsV2;if(!n)throw new Error("Album search failed");return{albums:{items:Le(n.items||[])},total:n.totalCount||0,offset:n.pagingInfo?.nextOffset||t,limit:n.pagingInfo?.limit||e}}async function ut(s,t=0,e=20){const n=(await v("searchDesktop",E.searchDesktop,{searchTerm:s,offset:t,limit:e,numberOfTopResults:20,includeAudiobooks:!1,includeAuthors:!1,includePreReleases:!1})).data?.searchV2;if(!n)throw new Error("Artist search failed");return{artists:{items:De(n.artists?.items||[])},total:n.artists?.totalCount||0,offset:t,limit:e}}async function pt(s,t=0,e=20){const n=(await v("searchDesktop",E.searchDesktop,{searchTerm:s,offset:t,limit:e,numberOfTopResults:20,includeAudiobooks:!1,includeAuthors:!1,includePreReleases:!1})).data?.searchV2;if(!n)throw new Error("Playlist search failed");return{playlists:{items:He(n.playlists?.items||[])},total:n.playlists?.totalCount||0,offset:t,limit:e}}async function dt(s){const e=(await v("getAlbum",E.getAlbum,{uri:`spotify:album:${s}`,locale:"",offset:0,limit:50})).data?.albumUnion;if(!e)throw console.error("[GQL] getAlbum returned null"),new Error("Failed to get album");const r=e.artists?.items?.map(i=>{const a=i.uri?.split(":").pop();return{id:a,uri:i.uri,name:i.profile?.name,external_urls:{spotify:`https://open.spotify.com/artist/${a}`},images:i.visuals?.avatarImage?.sources||[]}})||[],o=(e.tracksV2?.items||[]).map(i=>{const a=i.track,c=a.uri?.split(":").pop(),l=a.artists?.items?.map(u=>{const d=u.uri?.split(":").pop();return{id:d,uri:u.uri,name:u.profile?.name,external_urls:{spotify:`https://open.spotify.com/artist/${d}`}}})||[];return{id:c,uri:a.uri,name:a.name,duration_ms:a.duration?.totalMilliseconds,explicit:a.contentRating?.label==="EXPLICIT",artists:l,album:{id:s,name:e.name,images:e.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${s}`}},external_urls:{spotify:`https://open.spotify.com/track/${c}`},externalUri:`https://open.spotify.com/track/${c}`}});return{id:s,name:e.name,album_type:e.type?.toLowerCase(),label:e.label,release_date:e.date?.isoString,release_date_precision:e.date?.precision||"day",images:e.coverArt?.sources||[],artists:r,external_urls:{spotify:`https://open.spotify.com/album/${s}`},externalUri:`https://open.spotify.com/album/${s}`,copyrights:e.copyrights?.copyright||[],tracks:{items:o,total:e.tracksV2?.totalCount||0}}}async function ft(s,t=0,e=50){const n=(await v("getAlbum",E.getAlbum,{uri:`spotify:album:${s}`,locale:"",offset:t,limit:e})).data?.albumUnion;if(!n)throw new Error("Failed to get album tracks");const o=n.tracksV2?.items||[],i={id:s,name:n.name,images:n.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${s}`}},a=o.map(c=>{const l=c.track,u=l.uri?.split(":").pop(),d=l.artists?.items?.map(p=>{const m=p.uri?.split(":").pop();return{id:m,uri:p.uri,name:p.profile?.name,external_urls:{spotify:`https://open.spotify.com/artist/${m}`}}})||[];return{id:u,uri:l.uri,name:l.name,duration_ms:l.duration?.totalMilliseconds,explicit:l.contentRating?.label==="EXPLICIT",artists:d,album:i,external_urls:{spotify:`https://open.spotify.com/track/${u}`},externalUri:`https://open.spotify.com/track/${u}`}});return{items:a,total:n.tracksV2?.totalCount||0,offset:t,limit:e,next:a.length<e?null:`offset=${t+e}`}}async function ht(s){const e=(await v("queryArtistOverview",E.queryArtistOverview,{uri:`spotify:artist:${s}`,locale:""})).data?.artistUnion;if(!e)throw new Error("Failed to get artist");return{id:s,name:e.profile?.name,uri:`spotify:artist:${s}`,images:e.visuals?.avatarImage?.sources||[],followers:{total:e.stats?.followers||0},external_urls:{spotify:`https://open.spotify.com/artist/${s}`}}}async function mt(s){const e=(await v("queryArtistOverview",E.queryArtistOverview,{uri:`spotify:artist:${s}`,locale:""})).data?.artistUnion;if(!e)throw new Error("Failed to get artist top tracks");return{tracks:e.discography?.topTracks?.items?.map(n=>{const o=n.track;if(!o)return null;const i=o.uri?.split(":").pop(),a=o.artists?.items?.map(l=>{const u=l.uri?.split(":").pop();return{id:u,name:l.profile?.name,uri:l.uri,external_urls:{spotify:`https://open.spotify.com/artist/${u}`}}})||[],c=o.albumOfTrack?.uri?.split(":").pop();return{id:i,name:o.name,uri:o.uri,duration_ms:o.duration?.totalMilliseconds,artists:a,album:{id:c,name:o.albumOfTrack?.name,images:o.albumOfTrack?.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${c}`}},external_urls:{spotify:`https://open.spotify.com/track/${i}`}}}).filter(Boolean)||[]}}async function yt(s){const e=(await v("queryArtistOverview",E.queryArtistOverview,{uri:`spotify:artist:${s}`,locale:""})).data?.artistUnion;if(!e)throw new Error("Failed to get related artists");return{artists:e.relatedContent?.relatedArtists?.items?.map(n=>{const o=n.uri?.split(":").pop();return{id:o,name:n.profile?.name,uri:n.uri,images:n.visuals?.avatarImage?.sources||[],external_urls:{spotify:`https://open.spotify.com/artist/${o}`}}}).filter(Boolean)||[]}}async function gt(s){const e=(await v("getTrack",E.getTrack,{uri:`spotify:track:${s}`})).data?.trackUnion;if(!e)throw new Error("Failed to get track");const n=[...e.firstArtist?.items||[],...e.otherArtists?.items||[]].map(i=>{const a=i.uri?.split(":").pop();return{id:a,name:i.profile?.name,uri:i.uri,external_urls:{spotify:`https://open.spotify.com/artist/${a}`}}}),o=e.albumOfTrack?.uri?.split(":").pop();return{id:e.id,name:e.name,uri:e.uri,duration_ms:e.duration?.totalMilliseconds,artists:n,album:{id:o||e.albumOfTrack?.id,name:e.albumOfTrack?.name,images:e.albumOfTrack?.coverArt?.sources||[],album_type:e.albumOfTrack?.type?.toLowerCase(),release_date:e.albumOfTrack?.date?.isoString,external_urls:{spotify:`https://open.spotify.com/album/${o}`}},external_urls:{spotify:`https://open.spotify.com/track/${e.id}`}}}async function bt(s){return((await v("isCurated",E.isCurated,{uris:s.map(r=>`spotify:track:${r}`)})).data?.lookup||[]).filter(r=>r.data?.__typename==="Track").map(r=>r.data?.isCurated||!1)}async function wt(s){return v("addToLibrary",E.addToLibrary,{uris:s.map(t=>`spotify:track:${t}`)})}async function St(s){return v("removeFromLibrary",E.removeFromLibrary,{uris:s.map(t=>`spotify:track:${t}`)})}async function At(s,t=10){const e=new URLSearchParams;s.seed_tracks&&s.seed_tracks.length>0&&e.append("seed_tracks",s.seed_tracks.join(",")),s.seed_artists&&s.seed_artists.length>0&&e.append("seed_artists",s.seed_artists.join(",")),s.seed_genres&&s.seed_genres.length>0&&e.append("seed_genres",s.seed_genres.join(",")),e.append("limit",t.toString());const r=await oe(`/recommendations?${e.toString()}`);if(!r.tracks)throw new Error("Failed to get recommendations");return r.tracks.map(n=>({id:n.id,name:n.name,uri:n.uri,duration_ms:n.duration_ms,artists:n.artists.map(o=>({id:o.id,name:o.name,uri:o.uri,external_urls:o.external_urls})),album:{id:n.album.id,name:n.album.name,images:n.album.images,external_urls:n.album.external_urls},external_urls:n.external_urls}))}async function Tt(s="Asia/Kolkata",t=20){const r=(await v("home",E.home,{timeZone:s,sp_t:"",facet:"",sectionItemsLimit:t})).data?.home;return r?(r.sectionContainer?.sections?.items||[]).filter(o=>o.data?.__typename==="HomeGenericSectionData"&&o.sectionItems?.items?.length>0).map(o=>{const i=o.uri?.split(":").pop(),a=o.sectionItems?.items?.map(c=>{const l=c.content?.__typename,u=c.content?.data?.__typename;if(l==="PlaylistResponseWrapper"&&u==="Playlist"){const d=c.content.data,p=d.uri?.split(":").pop(),m=d.ownerV2?.data;return{type:"playlist",id:p,name:d.name,description:d.description,images:d.images?.items?.flatMap(g=>g.sources)||[],uri:d.uri,external_urls:{spotify:`https://open.spotify.com/playlist/${p}`},owner:{id:m?.uri?.split(":").pop(),display_name:m?.name}}}else if(l==="AlbumResponseWrapper"&&u==="Album"){const d=c.content.data,p=d.uri?.split(":").pop();return{type:"album",id:p,name:d.name,album_type:d.albumType?.toLowerCase(),images:d.coverArt?.sources||[],uri:d.uri,external_urls:{spotify:`https://open.spotify.com/album/${p}`},artists:d.artists?.items?.map(m=>({id:m.uri?.split(":").pop(),name:m.profile?.name}))||[]}}else if(l==="ArtistResponseWrapper"&&u==="Artist"){const d=c.content.data,p=d.uri?.split(":").pop();return{type:"artist",id:p,name:d.profile?.name,images:d.visuals?.avatarImage?.sources||[],uri:d.uri,external_urls:{spotify:`https://open.spotify.com/artist/${p}`}}}return null}).filter(Boolean)||[];return{id:i,title:o.data?.title?.transformedLabel||"Section",items:a}}).filter(o=>o.items?.length>0):[]}function $e(s){return s.filter(t=>t.item?.__typename==="TrackResponseWrapper"&&t.item?.data?.__typename==="Track").map(t=>{const e=t.item.data,r=e.uri?.split(":").pop(),n=e.artists?.items?.map(i=>{const a=i.uri?.split(":").pop();return{id:a,name:i.profile?.name,uri:i.uri,external_urls:{spotify:`https://open.spotify.com/artist/${a}`}}})||[],o=e.albumOfTrack?.uri?.split(":").pop();return{id:r,name:e.name,uri:e.uri,duration_ms:e.duration?.totalMilliseconds,artists:n,album:{id:o,name:e.albumOfTrack?.name,images:e.albumOfTrack?.coverArt?.sources||[],external_urls:{spotify:`https://open.spotify.com/album/${o}`}},external_urls:{spotify:`https://open.spotify.com/track/${r}`}}})}function Le(s){return s.filter(t=>t.__typename==="AlbumResponseWrapper"&&t.data?.__typename==="Album").map(t=>{const e=t.data,r=e.uri?.split(":").pop(),n=e.artists?.items?.map(o=>{const i=o.uri?.split(":").pop();return{id:i,name:o.profile?.name,uri:o.uri,external_urls:{spotify:`https://open.spotify.com/artist/${i}`}}})||[];return{id:r,name:e.name,album_type:e.type?.toLowerCase(),images:e.coverArt?.sources||[],artists:n,release_date:e.date?.year?.toString(),external_urls:{spotify:`https://open.spotify.com/album/${r}`}}})}function De(s){return s.filter(t=>t.__typename==="ArtistResponseWrapper"&&t.data?.__typename==="Artist").map(t=>{const e=t.data,r=e.uri?.split(":").pop();return{id:r,name:e.profile?.name,uri:e.uri,images:e.visuals?.avatarImage?.sources||[],external_urls:{spotify:`https://open.spotify.com/artist/${r}`}}})}function He(s){return s.filter(t=>t.__typename==="PlaylistResponseWrapper"&&t.data?.__typename==="Playlist").map(t=>{const e=t.data,r=e.uri?.split(":").pop(),n=e.ownerV2?.data,o=n?.uri?.split(":").pop();return{id:r,name:e.name,description:e.description,uri:e.uri,images:e.images?.items?.flatMap(i=>i.sources)||[],external_urls:{spotify:`https://open.spotify.com/playlist/${r}`},owner:{id:o,display_name:n?.name,uri:n?.uri}}})}const k={user:{me:st,savedTracks:rt,savedPlaylists:nt,recentlyPlayed:kt},playlist:{get:ot,getTracks:it},album:{get:dt,getTracks:ft},artist:{get:ht,getTopTracks:mt,getRelatedArtists:yt},track:{get:gt},search:{all:at,tracks:ct,albums:lt,artists:ut,playlists:pt},library:{checkSavedTracks:bt,saveTracks:wt,removeTracks:St},browse:{home:Tt,getRecommendations:At},player:{}};async function kt(s=50){const t=await oe(`/me/player/recently-played?limit=${s}`);if(!t.items)throw new Error("Failed to get recently played tracks");return{items:t.items.map(e=>({track:{id:e.track.id,name:e.track.name,uri:e.track.uri,duration_ms:e.track.duration_ms,artists:e.track.artists.map(r=>({id:r.id,name:r.name,uri:r.uri,external_urls:r.external_urls})),album:{id:e.track.album.id,name:e.track.album.name,images:e.track.album.images,external_urls:e.track.album.external_urls},external_urls:e.track.external_urls},played_at:e.played_at}))}}function Et(){console.log("[SpotifyHandler] Initializing..."),f.ipcMain.handle("spotify:get-me",async()=>{try{return await k.user.me()}catch(s){throw console.error("[SpotifyHandler] get-me error:",s.message),s}}),f.ipcMain.handle("spotify:get-saved-tracks",async(s,t=20,e=0)=>{try{return await k.user.savedTracks(e,t)}catch(r){throw console.error("[SpotifyHandler] get-saved-tracks error:",r.message),r}}),f.ipcMain.handle("spotify:get-my-playlists",async(s,t=50,e=0)=>{try{return await k.user.savedPlaylists(e,t)}catch(r){throw console.error("[SpotifyHandler] get-my-playlists error:",r.message),r}}),f.ipcMain.handle("spotify:get-recently-played",async(s,t=50)=>{try{return await k.user.recentlyPlayed(t)}catch(e){throw console.error("[SpotifyHandler] get-recently-played error:",e.message),e}}),f.ipcMain.handle("spotify:get-playlist",async(s,t)=>{try{return await k.playlist.get(t)}catch(e){throw console.error("[SpotifyHandler] get-playlist error:",e.message),e}}),f.ipcMain.handle("spotify:get-playlist-tracks",async(s,t,e=25,r=0)=>{try{return await k.playlist.getTracks(t,r,e)}catch(n){throw console.error("[SpotifyHandler] get-playlist-tracks error:",n.message),n}}),f.ipcMain.handle("spotify:get-album",async(s,t)=>{try{return await k.album.get(t)}catch(e){throw console.error("[SpotifyHandler] get-album error:",e.message),e}}),f.ipcMain.handle("spotify:get-album-tracks",async(s,t,e=0,r=50)=>{try{return await k.album.getTracks(t,e,r)}catch(n){throw console.error("[SpotifyHandler] get-album-tracks error:",n.message),n}}),f.ipcMain.handle("spotify:get-artist",async(s,t)=>{try{return await k.artist.get(t)}catch(e){throw console.error("[SpotifyHandler] get-artist error:",e.message),e}}),f.ipcMain.handle("spotify:get-artist-top-tracks",async(s,t)=>{try{return await k.artist.getTopTracks(t)}catch(e){throw console.error("[SpotifyHandler] get-artist-top-tracks error:",e.message),e}}),f.ipcMain.handle("spotify:get-related-artists",async(s,t)=>{try{return await k.artist.getRelatedArtists(t)}catch(e){throw console.error("[SpotifyHandler] get-related-artists error:",e.message),e}}),f.ipcMain.handle("spotify:get-recommendations",async(s,t,e=10)=>{try{return await k.browse.getRecommendations(t,e)}catch(r){throw console.error("[SpotifyHandler] get-recommendations error:",r.message),r}}),f.ipcMain.handle("spotify:get-track",async(s,t)=>{try{return await k.track.get(t)}catch(e){throw console.error("[SpotifyHandler] get-track error:",e.message),e}}),f.ipcMain.handle("spotify:search",async(s,t,e=0,r=10)=>{try{return await k.search.all(t,e,r)}catch(n){throw console.error("[SpotifyHandler] search error:",n.message),n}}),f.ipcMain.handle("spotify:search-tracks",async(s,t,e=0,r=20)=>{try{return await k.search.tracks(t,e,r)}catch(n){throw console.error("[SpotifyHandler] search-tracks error:",n.message),n}}),f.ipcMain.handle("spotify:search-albums",async(s,t,e=0,r=20)=>{try{return await k.search.albums(t,e,r)}catch(n){throw console.error("[SpotifyHandler] search-albums error:",n.message),n}}),f.ipcMain.handle("spotify:search-artists",async(s,t,e=0,r=20)=>{try{return await k.search.artists(t,e,r)}catch(n){throw console.error("[SpotifyHandler] search-artists error:",n.message),n}}),f.ipcMain.handle("spotify:search-playlists",async(s,t,e=0,r=20)=>{try{return await k.search.playlists(t,e,r)}catch(n){throw console.error("[SpotifyHandler] search-playlists error:",n.message),n}}),f.ipcMain.handle("spotify:check-saved-tracks",async(s,t)=>{try{return await k.library.checkSavedTracks(t)}catch(e){throw console.error("[SpotifyHandler] check-saved-tracks error:",e.message),e}}),f.ipcMain.handle("spotify:save-tracks",async(s,t)=>{try{return await k.library.saveTracks(t)}catch(e){throw console.error("[SpotifyHandler] save-tracks error:",e.message),e}}),f.ipcMain.handle("spotify:remove-tracks",async(s,t)=>{try{return await k.library.removeTracks(t)}catch(e){console.error("[SpotifyHandler] remove-tracks error:",e.message)}}),f.ipcMain.handle("spotify:get-home",async(s,t=20)=>{try{return await k.browse.home("Asia/Kolkata",t)}catch(e){throw console.error("[SpotifyHandler] get-home error:",e.message),e}}),f.ipcMain.handle("spotify:is-authenticated",async()=>B.isAuthenticated()),f.ipcMain.handle("spotify:get-access-token",async()=>B.accessToken),console.log("[SpotifyHandler] Initialized")}let z=null,K=null;function we(){return ze.join(f.app.getPath("userData"),"ytmusic-session.json")}function Oe(s){z=s;const t=s.match(/SAPISID=([^;]+)/);K=t?t[1]:null,console.log("[YTMusicAuth] Cookies set, SAPISID found:",!!K);try{J.writeFileSync(we(),JSON.stringify({cookies:s}),"utf-8"),console.log("[YTMusicAuth] Session saved to disk")}catch(e){console.error("[YTMusicAuth] Failed to save session:",e)}}function vt(){return z}function _t(){if(!K)return null;const s=Math.floor(Date.now()/1e3),e=Ke.createHash("sha1").update(`${s} ${K} https://music.youtube.com`).digest("hex");return`SAPISIDHASH ${s}_${e}`}function Rt(){z=null,K=null,console.log("[YTMusicAuth] Session cleared");try{const s=we();J.existsSync(s)&&J.unlinkSync(s)}catch(s){console.error("[YTMusicAuth] Failed to remove session file:",s)}}function xt(){return z!==null&&z.length>0}function It(){try{const s=we();if(J.existsSync(s)){const t=JSON.parse(J.readFileSync(s,"utf-8"));if(t?.cookies&&t.cookies.length>0)return Oe(t.cookies),console.log("[YTMusicAuth] Session restored from disk"),!0}}catch(s){console.error("[YTMusicAuth] Failed to restore session:",s)}return!1}const Ct=500,Mt=3,Pt=200,X=new Map,de=[];let I=0;const P=[];function $t(){for(;X.size>Ct&&de.length>0;){const s=de.shift();X.delete(s)}}function N(){for(;I<Mt&&P.length>0;){const s=P.shift();I++,Lt(s)}}function Lt(s){const r=(new URL(s.url).protocol==="https:"?Je:Ce).get(s.url,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",Accept:"image/webp,image/apng,image/*,*/*;q=0.8","Accept-Language":"en-US,en;q=0.9"},timeout:1e4},n=>{const o=n.statusCode||0;if(o===429||o===503){n.resume(),I--,s.retries>0?(console.log(`[ThumbCache] ${o} → retry in ${s.backoff}ms (${s.retries} left)`),setTimeout(()=>{s.retries--,s.backoff=Math.min(s.backoff*2,3e4),P.unshift(s),N()},s.backoff)):(s.reject(new Error("Rate limited after all retries")),$());return}if(o===301||o===302||o===303||o===307){n.resume(),I--;const a=n.headers.location;a&&s.retries>0?(s.url=a,s.retries--,P.unshift(s),N()):(s.reject(new Error("Too many redirects")),$());return}if(o!==200){n.resume(),I--,s.reject(new Error(`HTTP ${o}`)),$();return}const i=[];n.on("data",a=>{i.push(Buffer.from(a))}),n.on("end",()=>{const a=Buffer.concat(i);X.set(s.url,a),de.push(s.url),$t(),I--,s.resolve(a),$()}),n.on("error",a=>{I--,s.reject(a),$()})});r.on("timeout",()=>{r.destroy(),I--,s.retries>0?(s.retries--,s.backoff=Math.min(s.backoff*2,3e4),P.unshift(s),setTimeout(N,s.backoff)):(s.reject(new Error("Timeout")),$())}),r.on("error",n=>{I--,s.retries>0?setTimeout(()=>{s.retries--,s.backoff=Math.min(s.backoff*2,3e4),P.unshift(s),N()},s.backoff):(s.reject(n),$())})}function $(){P.length>0&&setTimeout(N,Pt)}function Dt(s){return new Promise((t,e)=>{P.push({url:s,resolve:t,reject:e,retries:3,backoff:2e3}),N()})}function Ht(){f.protocol.handle("thumb-cache",async s=>{try{const t=decodeURIComponent(s.url.replace("thumb-cache://",""));if(X.has(t))return new Response(X.get(t),{headers:{"Content-Type":"image/webp","Cache-Control":"max-age=604800"}});const e=await Dt(t);return new Response(e,{headers:{"Content-Type":"image/webp","Cache-Control":"max-age=604800"}})}catch(t){return console.error("[ThumbCache] Failed:",t.message?.substring(0,80)),new Response("",{status:502})}}),console.log("[ThumbCache] Protocol registered (cookie-free Node.js fetching)")}function Ot(s){return s?s.includes("googleusercontent.com")||s.includes("ggpht.com")?`thumb-cache://${encodeURIComponent(s)}`:s:""}const Ut="https://music.youtube.com/youtubei/v1",Nt="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",Ue="1.20241118.01.00";function Ft(){return{client:{clientName:"WEB_REMIX",clientVersion:Ue,hl:"en",gl:"IN",experimentIds:[],experimentsToken:"",browserName:"Chrome",browserVersion:"120.0.0.0",osName:"Windows",osVersion:"10.0",platform:"DESKTOP",musicAppInfo:{pwaInstallabilityStatus:"PWA_INSTALLABILITY_STATUS_UNKNOWN",webDisplayMode:"WEB_DISPLAY_MODE_BROWSER",musicActivityMasterSwitch:"MUSIC_ACTIVITY_MASTER_SWITCH_INDETERMINATE",musicLocationMasterSwitch:"MUSIC_LOCATION_MASTER_SWITCH_INDETERMINATE"}},user:{lockedSafetyMode:!1}}}async function M(s,t,e=""){const r=vt();if(!r)throw new Error("Not authenticated with YouTube Music");const n=`${Ut}/${s}?prettyPrint=false${e}`,o=JSON.stringify({context:Ft(),...t});return new Promise((i,a)=>{const c=f.net.request({url:n,method:"POST"});c.setHeader("Cookie",r),c.setHeader("User-Agent",Nt),c.setHeader("Content-Type","application/json"),c.setHeader("Origin","https://music.youtube.com"),c.setHeader("Referer","https://music.youtube.com/"),c.setHeader("X-Youtube-Client-Name","67"),c.setHeader("X-Youtube-Client-Version",Ue);const l=_t();l&&c.setHeader("Authorization",l);let u="";c.on("response",d=>{d.on("data",p=>{u+=p.toString()}),d.on("end",()=>{try{i(JSON.parse(u))}catch(p){console.error("[YTMusicApi] JSON parse error:",p,"Raw:",u.substring(0,300)),a(new Error("Failed to parse YouTube Music response"))}})}),c.on("error",d=>{console.error("[YTMusicApi] Request error:",d),a(d)}),c.write(o),c.end()})}function h(s,t,e=!1){let r=s;for(const n of t){if(r==null||typeof r!="object")return e?null:void 0;r=r[n]}return r??(e?null:void 0)}function C(s,t=226){if(!s)return"";let e=s;return(s.includes("googleusercontent.com")||s.includes("ggpht.com"))&&(e=s.replace(/=w\d+[^&\s]*|=s\d+[^&\s]*/i,`=w${t}-h${t}-l90-rj`)),Ot(e)}function H(s){return h(s,["thumbnailRenderer","musicThumbnailRenderer","thumbnail","thumbnails"])||h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"])||[]}function Y(s){const t=H(s),e=t.length>0&&t[t.length-1]?.url||"";return C(e)}function ee(s){const t=h(s,["subtitle","runs"])||[],e=[];let r=null,n="";const o=t.map(i=>i.text).join("");for(let i=0;i<t.length;i++){const a=t[i],c=h(a,["navigationEndpoint","browseEndpoint","browseId"],!0);c&&(c.startsWith("MPRE")?r={name:a.text,id:c}:(c.startsWith("UC")||c.startsWith("FE"))&&e.push({name:a.text,id:c})),a.text&&/^\d{4}$/.test(a.text.trim())&&(n=a.text.trim())}return{artists:e,album:r,subtitle:o,year:n}}function Bt(s){const t=h(s,["title","runs","0","text"])||"",e=h(s,["navigationEndpoint","watchEndpoint","videoId"])||"",r=h(s,["navigationEndpoint","watchEndpoint","playlistId"],!0)||"",n=H(s),o=Y(s),i=ee(s);return{type:"song",title:t,videoId:e,playlistId:r,artists:i.artists,album:i.album,subtitle:i.subtitle,thumbnails:n,imageUrl:o}}function Yt(s){const t=h(s,["title","runs","0","text"])||"",e=h(s,["navigationEndpoint","watchPlaylistEndpoint","playlistId"])||"",r=H(s),n=Y(s),o=ee(s);return{type:"watch_playlist",title:t,playlistId:e,subtitle:o.subtitle,thumbnails:r,imageUrl:n}}function Ee(s){const t=h(s,["title","runs","0","text"])||"",e=h(s,["title","runs","0","navigationEndpoint","browseEndpoint","browseId"])||"",r=e.startsWith("VL")?e.substring(2):e,n=H(s),o=Y(s),i=ee(s),a=h(s,["subtitle","runs"])||[];let c="",l=[];if(a.length>=3){const d=(a[a.length-1]?.text||"").match(/(\d+)/);d&&(c=d[1]);const p=a[0];p?.navigationEndpoint&&(l=[{name:p.text,id:h(p,["navigationEndpoint","browseEndpoint","browseId"])||""}])}return{type:"playlist",title:t,playlistId:r,browseId:e,subtitle:i.subtitle,description:i.subtitle,count:c,author:l,thumbnails:n,imageUrl:o}}function ve(s){const t=h(s,["title","runs","0","text"])||"",e=h(s,["title","runs","0","navigationEndpoint","browseEndpoint","browseId"])||"",r=H(s),n=Y(s),o=ee(s);return{type:"album",title:t,browseId:e,playlistId:e,artists:o.artists,year:o.year,subtitle:o.subtitle,thumbnails:r,imageUrl:n}}function _e(s){const t=h(s,["title","runs","0","text"])||"",e=h(s,["title","runs","0","navigationEndpoint","browseEndpoint","browseId"])||"",r=H(s),n=Y(s),o=h(s,["subtitle","runs","0","text"],!0)||"";return{type:"artist",title:t,browseId:e,subscribers:o.split(" ")[0],subtitle:o,thumbnails:r,imageUrl:n}}function te(s){const t=h(s,["title","runs","0"]);if(!t)return null;const e=s?.navigationEndpoint||t?.navigationEndpoint,r=h(e,["browseEndpoint","browseEndpointContextSupportedConfigs","browseEndpointContextMusicConfig","pageType"],!0)||"",n=h(e,["watchEndpoint","videoId"],!0),o=h(e,["watchPlaylistEndpoint","playlistId"],!0);if(n)return Bt(s);if(o&&!r)return Yt(s);if(r==="MUSIC_PAGE_TYPE_PLAYLIST")return Ee(s);if(r==="MUSIC_PAGE_TYPE_ALBUM"||r==="MUSIC_PAGE_TYPE_AUDIOBOOK")return ve(s);if(r==="MUSIC_PAGE_TYPE_ARTIST"||r==="MUSIC_PAGE_TYPE_USER_CHANNEL")return _e(s);const i=h(e,["browseEndpoint","browseId"],!0)||"";if(i.startsWith("VL"))return Ee(s);if(i.startsWith("UC")||i.startsWith("MP"))return _e(s);if(i.startsWith("MPRE"))return ve(s);const a=t?.text||"",c=Y(s),l=ee(s);return{type:"unknown",title:a,browseId:i,playlistId:i.startsWith("VL")?i.substring(2):"",subtitle:l.subtitle,thumbnails:H(s),imageUrl:c,id:i||Math.random().toString(36)}}function Ne(s){const t=[];try{const e=s?.contents?.singleColumnBrowseResultsRenderer?.tabs||[];for(const r of e){const n=r?.tabRenderer?.content?.sectionListRenderer?.contents||[];for(const o of n){const i=o?.musicCarouselShelfRenderer||o?.musicImmersiveCarouselShelfRenderer;if(i){const c=(i.header?.musicCarouselShelfBasicHeaderRenderer||i.header?.musicImmersiveCarouselShelfBasicHeaderRenderer)?.title?.runs?.[0]?.text||"Untitled",l=(i.contents||[]).map(u=>{const d=u?.musicTwoRowItemRenderer;if(d)return te(d);const p=u?.musicResponsiveListItemRenderer;return p?ie(p):null}).filter(Boolean);l.length>0&&t.push({id:c.replace(/\s+/g,"_").toLowerCase(),title:c,contents:l,items:l})}}}}catch(e){console.error("[YTMusicApi] Error extracting shelves:",e)}return t}function ie(s){const t=s.flexColumns||[],e=h(t,["0","musicResponsiveListItemFlexColumnRenderer","text","runs","0","text"])||"",r=h(t,["0","musicResponsiveListItemFlexColumnRenderer","text","runs","0","navigationEndpoint","watchEndpoint","videoId"],!0)||s?.playlistItemData?.videoId||h(s,["overlay","musicItemThumbnailOverlayRenderer","content","musicPlayButtonRenderer","playNavigationEndpoint","watchEndpoint","videoId"],!0)||"",n=h(t,["1","musicResponsiveListItemFlexColumnRenderer","text","runs"])||[],o=n.filter(b=>b.navigationEndpoint).map(b=>({name:b.text,id:h(b,["navigationEndpoint","browseEndpoint","browseId"])||""})),i=n.map(b=>b.text).join(""),a=h(t,["2","musicResponsiveListItemFlexColumnRenderer","text","runs","0"]),c=a?{name:a.text||"",id:h(a,["navigationEndpoint","browseEndpoint","browseId"])||""}:null,l=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"])||[],u=C(l.length>0?l[l.length-1]?.url:""),d=h(s,["fixedColumns","0","musicResponsiveListItemFixedColumnRenderer","text","runs","0","text"])||"",p=d.split(":").map(Number);let m=0,g=0;return p.length===2?(g=p[0]*60+p[1],m=g*1e3):p.length===3&&(g=p[0]*3600+p[1]*60+p[2],m=g*1e3),{type:"song",title:e,videoId:r,artists:o,album:c,subtitle:i,thumbnails:l,imageUrl:u,duration:d,durationMs:m,durationSeconds:g,id:r||Math.random().toString(36)}}function Wt(s){const t=[];try{const e=s?.contents?.twoColumnBrowseResultsRenderer,r=e?.secondaryContents?.sectionListRenderer,n=r?.contents?.[0]?.musicPlaylistShelfRenderer||r?.contents?.[0]?.musicShelfRenderer;if(n?.contents)for(const o of n.contents){const i=o?.musicResponsiveListItemRenderer;if(!i)continue;const a=ne(i);a&&a.videoId&&a.title&&t.push(a)}if(t.length===0){const o=e?.tabs||s?.contents?.singleColumnBrowseResultsRenderer?.tabs||[];for(const i of o){const a=i?.tabRenderer?.content?.sectionListRenderer?.contents||[];for(const c of a){const l=c?.musicShelfRenderer||c?.musicPlaylistShelfRenderer;if(l)for(const u of l.contents||[]){const d=u?.musicResponsiveListItemRenderer;if(!d)continue;const p=ne(d);p&&p.videoId&&p.title&&t.push(p)}}}}if(t.length===0&&e){const o=e.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents||[];for(const i of o){const a=i?.musicShelfRenderer;if(a?.contents)for(const c of a.contents){const l=c?.musicResponsiveListItemRenderer;if(!l)continue;const u=ne(l);u&&u.videoId&&u.title&&t.push(u)}}}}catch(e){console.error("[YTMusicApi] Error extracting playlist tracks:",e)}return t}function ne(s){const t=s.flexColumns||[];let e=s?.playlistItemData?.videoId||"";if(e||(e=h(s,["overlay","musicItemThumbnailOverlayRenderer","content","musicPlayButtonRenderer","playNavigationEndpoint","watchEndpoint","videoId"],!0)||""),e||(e=h(t,["0","musicResponsiveListItemFlexColumnRenderer","text","runs","0","navigationEndpoint","watchEndpoint","videoId"],!0)||""),!e){const m=h(s,["menu","menuRenderer","items"])||[];for(const g of m){const b=g?.menuServiceItemRenderer?.serviceEndpoint;if(b?.playlistEditEndpoint&&(e=b.playlistEditEndpoint.actions?.[0]?.removedVideoId||"",e))break}}const r=h(t,["0","musicResponsiveListItemFlexColumnRenderer","text","runs","0","text"])||"",n=[];let o=null,i=[];for(let m=1;m<t.length;m++){const g=h(t,[String(m),"musicResponsiveListItemFlexColumnRenderer","text","runs"])||[];for(const b of g){const y=h(b,["navigationEndpoint","browseEndpoint"],!0);if(y){const A=h(y,["browseEndpointContextSupportedConfigs","browseEndpointContextMusicConfig","pageType"],!0)||"";A==="MUSIC_PAGE_TYPE_ARTIST"||A==="MUSIC_PAGE_TYPE_USER_CHANNEL"||A==="MUSIC_PAGE_TYPE_UNKNOWN"?n.push({name:b.text,id:y.browseId||""}):(A==="MUSIC_PAGE_TYPE_ALBUM"||A==="MUSIC_PAGE_TYPE_AUDIOBOOK")&&(o={name:b.text,id:y.browseId||""})}b.text&&i.push(b.text)}}const a=i.join("");n.length===0&&a&&n.push({name:a.split(" • ")[0]?.split(" & ")[0]||a,id:""});const c=h(s,["fixedColumns","0","musicResponsiveListItemFixedColumnRenderer","text","runs","0","text"])||"",l=c.split(":").map(Number);let u=0;l.length===2?u=l[0]*60+l[1]:l.length===3&&(u=l[0]*3600+l[1]*60+l[2]);const d=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"])||[],p=C(d.length>0?d[d.length-1]?.url:"");return{type:"song",title:r,videoId:e,artists:n,album:o,subtitle:a,thumbnails:d,imageUrl:p,duration:c,durationMs:u*1e3,durationSeconds:u,id:e||Math.random().toString(36)}}function jt(s,t,e=!1){const r="EgWKAQ";let n=null;if(!s&&!t&&!e)return null;if(t==="uploads"&&(n="agIYAw%3D%3D"),t==="library")if(s){const o=Re(s);return r+o+"AWoKEAUQCRADEAoYBA%3D%3D"}else n="agIYBA%3D%3D";if(!t&&s)if(s==="playlists")n="Eg-KAQwIABAAGAAgACgB",e?n+="MABCAggBagoQBBADEAkQBRAK":n+="MABqChAEEAMQCRAFEAo%3D";else if(s.includes("playlists")){const o="EgeKAQQoA",i=s==="featured_playlists"?"Dg":"EA",a=e?"BQgIIAWoMEA4QChADEAQQCRAF":"BagwQDhAKEAMQBBAJEAU%3D";return o+i+a}else{const o=Re(s),i=e?"AUICCAFqDBAOEAoQAxAEEAkQBQ%3D%3D":"AWoMEA4QChADEAQQCRAF";return r+o+i}return!t&&!s&&e&&(n="EhGKAQ4IARABGAEgASgAOAFAAUICCAE%3D"),n}function Re(s){return{songs:"II",videos:"IQ",albums:"IY",artists:"Ig",playlists:"Io",profiles:"JY",podcasts:"JQ",episodes:"JI"}[s]||""}function Q(s,t){return s?.flexColumns?.length>t?h(s.flexColumns[t],["musicResponsiveListItemFlexColumnRenderer"],!0):null}function V(s,t,e=0){const r=Q(s,t);return r?h(r,["text","runs",e,"text"],!0):null}function pe(s,t,e){const r={category:e};if(!t){const n=h(s,["navigationEndpoint","browseEndpoint","browseId"],!0);if(n)n.startsWith("VM")||n.startsWith("RD")||n.startsWith("VL")?t="playlist":n.startsWith("MPLA")?t="artist":n.startsWith("MPRE")?t="album":n.startsWith("MPSP")?t="podcast":n.startsWith("MPED")?t="episode":n.startsWith("UC")&&(t="artist");else{const o=h(s,["playNavigationEndpoint","watchEndpoint","watchEndpointMusicSupportedConfigs","watchEndpointMusicConfig","musicVideoType"],!0);o==="MUSIC_VIDEO_TYPE_ATV"?t="song":o==="MUSIC_VIDEO_TYPE_PODCAST_EPISODE"?t="episode":t="video"}}if(!t&&e){const n=e.toLowerCase();n.includes("song")?t="song":n.includes("video")?t="video":n.includes("album")?t="album":n.includes("artist")?t="artist":n.includes("playlist")&&(t="playlist")}if(t||(t="song"),r.resultType=t,t!=="artist"&&(r.title=h(s,["title","runs",0,"text"],!0),r.title||(r.title=V(s,0))),t==="artist"){r.artist=h(s,["title","runs",0,"text"],!0)||V(s,0),r.browseId=h(s,["navigationEndpoint","browseEndpoint","browseId"],!0),r.thumbnails=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"],!0);const n=h(s,["subtitle","runs",0,"text"],!0);n&&n.includes("subscribers")&&(r.subscribers=n.split(" ")[0])}else if(t==="album"){r.type=h(s,["subtitle","runs",0,"text"],!0),r.browseId=h(s,["navigationEndpoint","browseEndpoint","browseId"],!0),r.thumbnails=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"],!0);let n=h(s,["subtitle","runs"]);if(!n){const o=Q(s,1);n=h(o,["text","runs"],!0)||[]}n.length>2&&(r.year=n[n.length-1].text,r.artist=n[2].text),!r.type&&n.length>0&&(r.type=n[0].text)}else if(t==="playlist"){r.title=h(s,["title","runs",0,"text"],!0)||V(s,0),r.thumbnails=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"],!0);let n=h(s,["subtitle","runs"]);if(!n){const i=Q(s,1);n=h(i,["text","runs"],!0)||[]}n.length>0&&(r.author=n[0].text,r.itemCount=n[n.length-1]?.text.split(" ")[0]);const o=h(s,["navigationEndpoint","browseEndpoint","browseId"],!0);r.playlistId=o,r.browseId=o}else if(t==="song"){r.type="song",r.videoId=h(s,["playNavigationEndpoint","watchEndpoint","videoId"],!0),r.videoId||(r.videoId=h(s,["onTap","watchEndpoint","videoId"],!0)),r.title=h(s,["title","runs",0,"text"],!0)||V(s,0),r.thumbnails=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"],!0);let n=h(s,["subtitle","runs"]);if(!n){const c=Q(s,1);n=h(c,["text","runs"],!0)||[]}const o=[];let i=null,a=null;for(const c of n)c.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")?o.push({name:c.text,id:c.navigationEndpoint.browseEndpoint.browseId}):c.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE")||c.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("OLAK")?i={name:c.text,id:c.navigationEndpoint.browseEndpoint.browseId}:/^\d+:\d+$/.test(c.text)&&(a=c.text);if(o.length===0&&n.length>0){const c=n.filter(l=>l.text!==" • ");c.length>0&&o.push({name:c[0].text,id:""}),c.length>1}r.artists=o,r.album=i,r.duration=a,r.imageUrl=C(r.thumbnails?.[r.thumbnails.length-1]?.url)}else if(t==="video"){r.type="video",r.videoId=h(s,["playNavigationEndpoint","watchEndpoint","videoId"],!0),r.title=h(s,["title","runs",0,"text"],!0)||V(s,0),r.thumbnails=h(s,["thumbnail","musicThumbnailRenderer","thumbnail","thumbnails"],!0);let n=h(s,["subtitle","runs"]);if(!n){const c=Q(s,1);n=h(c,["text","runs"],!0)||[]}const o=[];let i="",a="";for(const c of n)c.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")?o.push({name:c.text,id:c.navigationEndpoint.browseEndpoint.browseId}):c.text.includes("views")?i=c.text.split(" ")[0]:/^\d+:\d+$/.test(c.text)&&(a=c.text);if(o.length===0&&n.length>0){const c=n.filter(l=>l.text!==" • ");c.length>0&&o.push({name:c[0].text,id:""})}r.artists=o,r.views=i,r.duration=a,r.imageUrl=C(r.thumbnails?.[r.thumbnails.length-1]?.url)}return r.thumbnails&&r.thumbnails.length>0&&(r.imageUrl=C(r.thumbnails[r.thumbnails.length-1].url)),r}async function Vt(s=10){console.log("[YTMusicApi] Fetching home (limit:",s,")...");const t={browseId:"FEmusic_home"},e=await M("browse",t),r=Ne(e);console.log(`[YTMusicApi] Initial home sections: ${r.length}`);try{const n=e?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer;if(n?.continuations){let o=n.continuations?.[0]?.nextContinuationData?.continuation,i=0;const a=Math.max(0,s-r.length);for(;o&&i<a;){const c=`&ctoken=${o}&continuation=${o}`,u=(await M("browse",t,c))?.continuationContents?.sectionListContinuation;if(!u?.contents)break;for(const d of u.contents){const p=d?.musicCarouselShelfRenderer||d?.musicImmersiveCarouselShelfRenderer;if(!p)continue;const g=(p.header?.musicCarouselShelfBasicHeaderRenderer||p.header?.musicImmersiveCarouselShelfBasicHeaderRenderer)?.title?.runs?.[0]?.text||"Untitled",b=(p.contents||[]).map(y=>{const A=y?.musicTwoRowItemRenderer;if(A)return te(A);const R=y?.musicResponsiveListItemRenderer;return R?ie(R):null}).filter(Boolean);b.length>0&&r.push({id:g.replace(/\s+/g,"_").toLowerCase(),title:g,contents:b,items:b})}o=u.continuations?.[0]?.nextContinuationData?.continuation||null,i++,console.log(`[YTMusicApi] Loaded continuation ${i}, total sections: ${r.length}`)}}}catch(n){console.error("[YTMusicApi] Error loading home continuations:",n)}return console.log(`[YTMusicApi] Total home sections loaded: ${r.length}`),r}async function qt(s,t,e,r=!1){console.log(`[YTMusicApi] Searching: '${s}' (filter: ${t}, scope: ${e})`);const n={query:s},o=jt(t,e,r);o&&(n.params=o);const i=await M("search",n),a=[];if(!i?.contents)return a;let c;i.contents.tabbedSearchResultsRenderer?c=i.contents.tabbedSearchResultsRenderer.tabs[e==="uploads"?1:0]?.tabRenderer?.content:c=i.contents;const l=h(c,["sectionListRenderer","contents"],!0);if(!l)return a;let u;t&&t.includes("playlists")?u="playlist":e==="uploads"?u="upload":t&&(u=t.slice(0,-1));for(const d of l){let p;if(d.musicCardShelfRenderer){const m=d.musicCardShelfRenderer,g=pe(m,void 0,"Top result");a.push(g);const b=m.contents;if(b)for(const y of b)y.musicResponsiveListItemRenderer&&a.push(pe(y.musicResponsiveListItemRenderer,"song","More from YouTube"))}else if(d.musicShelfRenderer){const m=d.musicShelfRenderer;p=h(m,["title","runs",0,"text"],!0);let g=u;if(!g&&p){const y=p.toLowerCase();y==="songs"?g="song":y==="videos"?g="video":y==="albums"?g="album":y==="artists"?g="artist":(y==="playlists"||y==="community playlists")&&(g="playlist")}const b=m.contents||[];for(const y of b)y.musicResponsiveListItemRenderer&&a.push(pe(y.musicResponsiveListItemRenderer,g,p))}}return console.log(`[YTMusicApi] Found ${a.length} search results`),a}async function Gt(s,t=!1){const r=await M("music/get_search_suggestions",{input:s}),n=h(r,["contents",0,"searchSuggestionsSectionRenderer","contents"],!0)||[],o=[];for(const i of n)if(i.historySuggestionRenderer){const a=i.historySuggestionRenderer,c=h(a,["navigationEndpoint","searchEndpoint","query"],!0),l=h(a,["suggestion","runs"],!0);t?o.push({text:c,runs:l,fromHistory:!0}):o.push(c)}else if(i.searchSuggestionRenderer){const a=i.searchSuggestionRenderer,c=h(a,["navigationEndpoint","searchEndpoint","query"],!0),l=h(a,["suggestion","runs"],!0);t?o.push({text:c,runs:l,fromHistory:!1}):o.push(c)}return o}async function Qt(){console.log("[YTMusicApi] Fetching user playlists...");const s=await M("browse",{browseId:"FEmusic_liked_playlists"}),t=Ne(s),e=[];for(const r of t)e.push(...(r.items||r.contents||[]).filter(n=>n.type==="playlist"||n.type==="album"||n.type==="watch_playlist"));if(e.length===0)try{const r=s?.contents?.singleColumnBrowseResultsRenderer?.tabs||[];for(const n of r){const o=n?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.gridRenderer;if(o)for(const i of o.items||[]){const a=i?.musicTwoRowItemRenderer;a&&e.push(te(a))}}}catch(r){console.error("[YTMusicApi] Error extracting library playlists:",r)}return e}function Jt(s){const t=[];try{const e=s?.contents?.singleColumnBrowseResultsRenderer?.tabs||[];for(const r of e){const n=r?.tabRenderer?.content?.sectionListRenderer?.contents||[];for(const o of n){const i=o?.musicShelfRenderer;if(i?.contents)for(const c of i.contents){const l=c?.musicResponsiveListItemRenderer;if(l){const u=ne(l);u&&u.videoId&&u.title&&t.push(u)}}const a=o?.musicCarouselShelfRenderer;if(a?.contents)for(const c of a.contents){const l=c?.musicTwoRowItemRenderer;if(l){const d=te(l);d&&d.type==="song"&&d.videoId&&t.push(d)}const u=c?.musicResponsiveListItemRenderer;if(u){const d=ie(u);d&&d.videoId&&d.title&&t.push(d)}}}}}catch(e){console.error("[YTMusicApi] Error extracting channel songs:",e)}return t}async function zt(s){console.log("[YTMusicApi] Fetching playlist:",s);const e=["MPRE","UC","MPSP","FE","VL"].some(A=>s.startsWith(A)),r=s.startsWith("UC"),n=e?s:`VL${s}`,o=r?"channel":s.startsWith("MPRE")?"album":"playlist";console.log("[YTMusicApi] Using browseId:",n,`(${o})`);const i=await M("browse",{browseId:n}),a=Object.keys(i||{});console.log("[YTMusicApi] Response top-level keys:",a.join(", ")),i?.contents&&console.log("[YTMusicApi] contents keys:",Object.keys(i.contents).join(", "));const c=i?.contents?.twoColumnBrowseResultsRenderer,l=c?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0];if(c){console.log("[YTMusicApi] twoCol found, secondaryContents:",!!c?.secondaryContents);const A=c?.secondaryContents?.sectionListRenderer?.contents?.[0];A&&console.log("[YTMusicApi] secondaryContents[0] keys:",Object.keys(A).join(", "))}let u=null;if(l?.musicEditablePlaylistDetailHeaderRenderer){const A=l.musicEditablePlaylistDetailHeaderRenderer;u=A.header?.musicResponsiveHeaderRenderer||A.header?.musicDetailHeaderRenderer||A}else l?.musicResponsiveHeaderRenderer&&(u=l.musicResponsiveHeaderRenderer);u||(u=i?.header?.musicImmersiveHeaderRenderer||i?.header?.musicDetailHeaderRenderer||i?.header?.musicVisualHeaderRenderer||i?.header?.musicResponsiveHeaderRenderer||{});const d=u?.title?.runs?.[0]?.text||"YouTube Music Playlist",m=(u?.subtitle?.runs||u?.straplineTextOne?.runs||[]).map(A=>A.text).join(""),g=u?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails||u?.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails||u?.thumbnail?.croppedSquareThumbnailRenderer?.thumbnail?.thumbnails||[],b=C(g.length>0?g[g.length-1]?.url:"");let y;return r?(y=Jt(i),console.log(`[YTMusicApi] Channel '${d}': ${y.length} songs extracted from shelves`)):(y=Wt(i),console.log(`[YTMusicApi] Playlist '${d}': ${y.length} tracks extracted`)),{id:s,title:d,subtitle:m,imageUrl:b,thumbnails:g,trackCount:y.length,tracks:y}}async function Kt(s){console.log("[YTMusicApi] Fetching song details:",s);const e=(await M("player",{videoId:s}))?.videoDetails||{},r=e.thumbnail?.thumbnails||[];return{id:e.videoId||s,title:e.title||"",artists:e.author||"",durationMs:(parseInt(e.lengthSeconds)||0)*1e3,durationSeconds:parseInt(e.lengthSeconds)||0,imageUrl:C(r.length>0?r[r.length-1]?.url:""),thumbnails:r,videoId:e.videoId||s}}async function Xt(s,t,e=25,r=!1){console.log("[YTMusicApi] Fetching watch playlist for:",s,r?"(radio)":"");const n={enablePersistentPlaylistPanel:!0,isAudioOnly:!0,tunerSettingValue:"AUTOMIX_SETTING_NORMAL"};s&&(n.videoId=s,r?n.playlistId=`RDAMVM${s}`:t&&(n.playlistId=t));const o=await M("next",n),i={tracks:[],playlistId:null,lyrics:null,related:null};try{const a=o?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs||[],l=a[0]?.tabRenderer?.content?.musicQueueRenderer?.content?.playlistPanelRenderer;if(l){i.playlistId=l.playlistId||null;for(const u of l.contents||[]){const d=u?.playlistPanelVideoRenderer;if(!d)continue;const p=h(d,["title","runs","0","text"])||"",m=d.videoId||h(d,["navigationEndpoint","watchEndpoint","videoId"])||"",g=h(d,["lengthText","runs","0","text"])||"",b=h(d,["longBylineText","runs"])||[],y=[];let A=null;for(const ue of b){const W=h(ue,["navigationEndpoint","browseEndpoint","browseId"],!0);W&&(W.startsWith("MPRE")?A={name:ue.text,id:W}:W.startsWith("UC")&&y.push({name:ue.text,id:W}))}y.length===0&&b.length>0&&y.push({name:b[0]?.text||"Unknown",id:""});const R=g.split(":").map(Number);let O=0;R.length===2?O=R[0]*60+R[1]:R.length===3&&(O=R[0]*3600+R[1]*60+R[2]);const se=h(d,["thumbnail","thumbnails"])||[],Ge=C(se.length>0?se[se.length-1]?.url:"");i.tracks.push({type:"song",title:p,videoId:m,artists:y,album:A,duration:g,durationMs:O*1e3,durationSeconds:O,thumbnails:se,imageUrl:Ge,id:m})}}if(a[1]){const u=h(a,["1","tabRenderer","endpoint","browseEndpoint","browseId"],!0);i.lyrics=u||null}if(a[2]){const u=h(a,["2","tabRenderer","endpoint","browseEndpoint","browseId"],!0);i.related=u||null}}catch(a){console.error("[YTMusicApi] Error parsing watch playlist:",a)}return console.log(`[YTMusicApi] Watch playlist: ${i.tracks.length} tracks, related: ${i.related}`),i}async function Zt(s){console.log("[YTMusicApi] Fetching song related:",s);const t=await M("browse",{browseId:s}),e=[];try{const r=t?.contents?.sectionListRenderer?.contents||[];for(const n of r){const o=n?.musicCarouselShelfRenderer||n?.musicDescriptionShelfRenderer;if(n?.musicDescriptionShelfRenderer){const l=n.musicDescriptionShelfRenderer,u=h(l,["header","musicCarouselShelfBasicHeaderRenderer","title","runs","0","text"])||h(l,["header","runs","0","text"])||"About";e.push({title:u,contents:h(l,["description","runs","0","text"])||""});continue}if(!o)continue;const a=o.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.[0]?.text||"Related",c=[];for(const l of o.contents||[]){const u=l?.musicTwoRowItemRenderer;if(u){const p=te(u);p&&c.push(p);continue}const d=l?.musicResponsiveListItemRenderer;if(d){const p=ie(d);p&&c.push(p)}}c.length>0&&e.push({title:a,contents:c})}}catch(r){console.error("[YTMusicApi] Error parsing song related:",r)}return console.log(`[YTMusicApi] Song related: ${e.length} sections`),e}function es(){console.log("[YTMusicHandler] Initializing..."),f.ipcMain.handle("ytmusic:is-authenticated",()=>xt()),f.ipcMain.handle("ytmusic:logout",async()=>{Rt();try{await f.session.fromPartition("persist:ytmusic_login").clearStorageData()}catch(s){console.error("[YTMusicHandler] Failed to clear webview session:",s)}return{success:!0}}),f.ipcMain.handle("ytmusic:get-home",async()=>{try{return await Vt()}catch(s){throw console.error("[YTMusicHandler] get-home error:",s.message),s}}),f.ipcMain.handle("ytmusic:get-playlists",async()=>{try{return await Qt()}catch(s){throw console.error("[YTMusicHandler] get-playlists error:",s.message),s}}),f.ipcMain.handle("ytmusic:get-playlist",async(s,t)=>{try{return await zt(t)}catch(e){throw console.error("[YTMusicHandler] get-playlist error:",e.message),e}}),f.ipcMain.handle("ytmusic:search",async(s,t,e)=>{try{return await qt(t,e?.filter,e?.scope,e?.ignoreSpelling)}catch(r){throw console.error("[YTMusicHandler] search error:",r.message),r}}),f.ipcMain.handle("ytmusic:get-search-suggestions",async(s,t,e)=>{try{return await Gt(t,e)}catch(r){throw console.error("[YTMusicHandler] get-search-suggestions error:",r.message),r}}),f.ipcMain.handle("ytmusic:get-song",async(s,t)=>{try{return await Kt(t)}catch(e){throw console.error("[YTMusicHandler] get-song error:",e.message),e}}),f.ipcMain.handle("ytmusic:get-watch-playlist",async(s,t,e,r)=>{try{return await Xt(t,e,25,r||!1)}catch(n){throw console.error("[YTMusicHandler] get-watch-playlist error:",n.message),n}}),f.ipcMain.handle("ytmusic:get-song-related",async(s,t)=>{try{return await Zt(t)}catch(e){throw console.error("[YTMusicHandler] get-song-related error:",e.message),e}})}f.app.commandLine.appendSwitch("ignore-certificate-errors");f.protocol.registerSchemesAsPrivileged([{scheme:"thumb-cache",privileges:{standard:!1,secure:!0,supportFetchAPI:!0,corsEnabled:!0,stream:!0}}]);const _=S.join(f.app.getPath("userData"),"audio-cache"),fe=S.join(f.app.getPath("userData"),"cache-settings.json"),xe={enabled:!0,maxSizeMB:500},ts=47831;let x=ts,q=null;const ss=()=>{q||(q=Ce.createServer(async(s,t)=>{try{const e=new URL(s.url||"",`http://localhost:${x}`),r=e.pathname;if(r==="/stream"){const c=e.searchParams.get("id"),l=e.searchParams.get("quality")||"720";if(!c){t.writeHead(400,{"Content-Type":"text/plain"}),t.end("Missing id parameter");return}const d=!f.app.isPackaged?S.join(__dirname,"../bin/ffmpeg.exe"):S.join(process.resourcesPath,"bin","ffmpeg.exe");console.log(`[Proxy] Streaming video: ${c} (${l}p)`),console.log(`[Proxy] Using ffmpeg from: ${d}`);const p=`bv*[height<=${l}]+ba/b[height<=${l}]/b`,m=[`https://www.youtube.com/watch?v=${c}`,"-o","-","--format",p,"--ffmpeg-location",d,"--merge-output-format","mkv","--no-warnings","--no-check-certificate","--no-progress","--quiet","--user-agent",L],g=re.spawn(F,m);t.writeHead(200,{"Content-Type":"video/webm","Access-Control-Allow-Origin":"*"}),g.stdout.pipe(t),g.stderr.on("data",b=>{const y=b.toString();(y.includes("Error")||y.includes("headers"))&&console.error(`[Proxy] yt-dlp stderr: ${y}`)}),g.on("error",b=>{console.error("[Proxy] Process error:",b),t.headersSent||(t.writeHead(500),t.end("Stream process error"))}),s.on("close",()=>{console.log("[Proxy] Client disconnected, killing process"),g.kill()});return}if(r==="/audio"){const c=e.searchParams.get("id"),l=e.searchParams.get("quality")||"high";if(!c){t.writeHead(400,{"Content-Type":"text/plain"}),t.end("Missing id parameter");return}console.log(`[Proxy] Streaming audio: ${c} (quality: ${l})`);let u="bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best";l==="medium"?u="bestaudio[abr<=128][ext=m4a]/bestaudio[abr<=128]/bestaudio":l==="low"&&(u="worstaudio[ext=m4a]/worstaudio");const d=[`https://www.youtube.com/watch?v=${c}`,"-o","-","--format",u,"--no-warnings","--no-check-certificate","--user-agent",L,"--no-playlist"],p=re.spawn(F,d);t.writeHead(200,{"Content-Type":"audio/mp4","Access-Control-Allow-Origin":"*","Transfer-Encoding":"chunked","Cache-Control":"no-cache"}),p.stdout.pipe(t),p.stderr.on("data",m=>{const g=m.toString();(g.includes("ERROR")||g.includes("error"))&&console.error(`[Proxy] yt-dlp audio error: ${g}`)}),p.on("error",m=>{console.error("[Proxy] Audio process error:",m),t.headersSent||(t.writeHead(500),t.end("Audio stream process error"))}),p.on("close",m=>{m!==0&&m!==null&&console.error(`[Proxy] yt-dlp exited with code ${m}`)}),s.on("close",()=>{console.log("[Proxy] Audio client disconnected, killing process"),p.kill()});return}if(r==="/playlist"){const c=e.searchParams.get("id");if(!c){t.writeHead(400,{"Content-Type":"text/plain"}),t.end("Missing id parameter");return}console.log(`[Proxy] Generating HLS playlist for: ${c}`);try{const l=[`https://www.youtube.com/watch?v=${c}`,"--dump-single-json","--no-warnings","--no-check-certificate","--user-agent",L],u=re.spawn(F,l);let d="";u.stdout.on("data",p=>{d+=p.toString()}),u.on("close",p=>{if(p!==0){t.writeHead(500,{"Content-Type":"text/plain"}),t.end("Failed to get video info");return}try{const g=(JSON.parse(d).formats||[]).filter(y=>y.vcodec!=="none"&&y.acodec!=="none"&&y.url&&y.height).sort((y,A)=>(A.height||0)-(y.height||0));if(g.length===0){t.writeHead(404,{"Content-Type":"text/plain"}),t.end("No muxed formats available");return}let b=`#EXTM3U
-`;b+=`#EXT-X-VERSION:3
-`;for(const y of g){const A=y.tbr?Math.round(y.tbr*1e3):y.height*3e3,R=`${y.width||y.height*16/9}x${y.height}`,O=`http://localhost:${x}/proxy?url=${encodeURIComponent(y.url)}`;b+=`#EXT-X-STREAM-INF:BANDWIDTH=${A},RESOLUTION=${R},NAME="${y.height}p"
-`,b+=`${O}
-`}t.writeHead(200,{"Content-Type":"application/vnd.apple.mpegurl","Access-Control-Allow-Origin":"*","Cache-Control":"no-cache"}),t.end(b),console.log(`[Proxy] Generated HLS playlist with ${g.length} qualities`)}catch(m){console.error("[Proxy] Failed to parse yt-dlp output:",m),t.writeHead(500,{"Content-Type":"text/plain"}),t.end("Failed to parse video info")}}),u.on("error",p=>{console.error("[Proxy] yt-dlp error:",p),t.writeHead(500,{"Content-Type":"text/plain"}),t.end("Failed to start yt-dlp")});return}catch(l){console.error("[Proxy] Playlist error:",l),t.writeHead(500,{"Content-Type":"text/plain"}),t.end(`Playlist error: ${l.message}`);return}}const n=e.searchParams.get("url");if(!n){t.writeHead(400,{"Content-Type":"text/plain"}),t.end("Missing url or id parameter");return}const o=await fetch(n,{headers:{"User-Agent":L,Referer:"https://www.youtube.com/",Origin:"https://www.youtube.com"}});if(!o.ok){t.writeHead(o.status),t.end(`Upstream error: ${o.status}`);return}const i=o.headers.get("content-type")||"application/octet-stream",a={"Content-Type":i,"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"*"};if(s.method==="OPTIONS"){t.writeHead(204,a),t.end();return}if(n.includes(".m3u8")||i.includes("mpegurl")){let c=await o.text();c=c.replace(/^(https?:\/\/[^\s]+)/gm,l=>`http://localhost:${x}/proxy?url=${encodeURIComponent(l)}`),t.writeHead(200,a),t.end(c)}else{const c=Buffer.from(await o.arrayBuffer());t.writeHead(200,{...a,"Content-Length":c.length.toString()}),t.end(c)}}catch(e){console.error("[HLS Proxy] Error:",e.message),t.writeHead(500),t.end(`Proxy error: ${e.message}`)}}),q.listen(x,()=>{console.log(`[Proxy] Server running on port ${x}`)}),q.on("error",s=>{s.code==="EADDRINUSE"?(console.log(`[Proxy] Port ${x} in use, trying next port`),x++,q?.listen(x)):console.error("[Proxy] Server error:",s)}))},Se=()=>{w.existsSync(_)||w.mkdirSync(_,{recursive:!0})},Ae=()=>{try{if(w.existsSync(fe)){const s=w.readFileSync(fe,"utf-8");return{...xe,...JSON.parse(s)}}}catch(s){console.error("Error reading cache settings:",s)}return xe},rs=s=>{try{w.writeFileSync(fe,JSON.stringify(s,null,2))}catch(t){console.error("Error saving cache settings:",t)}},ae=()=>{Se();const s=[];try{const e=w.readdirSync(_).filter(r=>r.endsWith(".meta.json"));for(const r of e){const n=r.replace(".meta.json",""),o=S.join(_,`${n}.audio`),i=S.join(_,r);if(w.existsSync(o))try{const a=JSON.parse(w.readFileSync(i,"utf-8"));s.push({key:n,metadata:a,audioPath:o})}catch{}}}catch(t){console.error("Error reading cache entries:",t)}return s},ns=()=>ae().reduce((t,e)=>t+(e.metadata.size||0),0),Fe=(s,t=0)=>{const e=ns(),r=s-t;if(e<=r)return;const n=ae();n.sort((a,c)=>a.metadata.cachedAt-c.metadata.cachedAt);let o=0;const i=e-r;for(const a of n){if(o>=i)break;try{w.unlinkSync(a.audioPath),w.unlinkSync(S.join(_,`${a.key}.meta.json`)),o+=a.metadata.size,console.log(`[Cache] Evicted: ${a.key} (${a.metadata.size} bytes)`)}catch(c){console.error(`Error evicting ${a.key}:`,c)}}};f.ipcMain.handle("cache-get",async(s,t)=>{try{const e=S.join(_,`${t}.audio`);if(w.existsSync(e)){const r=w.readFileSync(e);return console.log(`[Cache] HIT: ${t}`),r.buffer}return console.log(`[Cache] MISS: ${t}`),null}catch(e){return console.error("Cache get error:",e),null}});f.ipcMain.handle("cache-put",async(s,t,e,r)=>{try{const n=Ae();if(!n.enabled)return!1;Se();const o=n.maxSizeMB*1024*1024,i=e.byteLength;if(i>o)return console.log(`[Cache] File too large to cache: ${i} bytes`),!1;Fe(o,i);const a=S.join(_,`${t}.audio`),c=S.join(_,`${t}.meta.json`),l={trackId:"",searchQuery:"",...r,cachedAt:Date.now(),size:i};return w.writeFileSync(a,Buffer.from(e)),w.writeFileSync(c,JSON.stringify(l,null,2)),console.log(`[Cache] STORED: ${t} (${i} bytes)`),!0}catch(n){return console.error("Cache put error:",n),!1}});f.ipcMain.handle("cache-delete",async(s,t)=>{try{const e=S.join(_,`${t}.audio`),r=S.join(_,`${t}.meta.json`);return w.existsSync(e)&&w.unlinkSync(e),w.existsSync(r)&&w.unlinkSync(r),console.log(`[Cache] DELETED: ${t}`),!0}catch(e){return console.error("Cache delete error:",e),!1}});f.ipcMain.handle("cache-clear",async()=>{try{Se();const s=w.readdirSync(_);for(const t of s)w.unlinkSync(S.join(_,t));return console.log("[Cache] CLEARED all entries"),!0}catch(s){return console.error("Cache clear error:",s),!1}});f.ipcMain.handle("cache-stats",async()=>{try{const s=ae(),t=s.reduce((e,r)=>e+r.metadata.size,0);return{count:s.length,sizeBytes:t,sizeMB:Math.round(t/(1024*1024)*100)/100}}catch(s){return console.error("Cache stats error:",s),{count:0,sizeBytes:0,sizeMB:0}}});f.ipcMain.handle("cache-settings-get",async()=>Ae());f.ipcMain.handle("cache-settings-set",async(s,t)=>{try{const r={...Ae(),...t};return rs(r),r.enabled&&t.maxSizeMB&&Fe(r.maxSizeMB*1024*1024),!0}catch(e){return console.error("Cache settings save error:",e),!1}});f.ipcMain.handle("cache-list",async()=>{try{return ae().map(t=>({key:t.key,trackId:t.metadata.trackId,searchQuery:t.metadata.searchQuery,cachedAt:t.metadata.cachedAt,sizeMB:Math.round(t.metadata.size/(1024*1024)*100)/100}))}catch(s){return console.error("Cache list error:",s),[]}});const he=S.join(f.app.getPath("userData"),"song-preferences.json"),ce=()=>{try{if(w.existsSync(he)){const s=w.readFileSync(he,"utf-8");return JSON.parse(s)}}catch(s){console.error("Error loading song preferences:",s)}return{}},Te=s=>{try{w.writeFileSync(he,JSON.stringify(s,null,2))}catch(t){console.error("Error saving song preferences:",t)}};f.ipcMain.handle("song-pref-get",async(s,t)=>{try{return ce()[t]||null}catch(e){return console.error("Song pref get error:",e),null}});f.ipcMain.handle("song-pref-set",async(s,t,e)=>{try{const r=ce();return r[t]={...e,savedAt:Date.now()},Te(r),console.log(`[SongPref] Saved preference for: ${t}`),!0}catch(r){return console.error("Song pref set error:",r),!1}});f.ipcMain.handle("song-pref-delete",async(s,t)=>{try{const e=ce();return e[t]&&(delete e[t],Te(e),console.log(`[SongPref] Deleted preference for: ${t}`)),!0}catch(e){return console.error("Song pref delete error:",e),!1}});f.ipcMain.handle("song-pref-list",async()=>{try{return ce()}catch(s){return console.error("Song pref list error:",s),{}}});f.ipcMain.handle("song-pref-clear",async()=>{try{return Te({}),console.log("[SongPref] Cleared all preferences"),!0}catch(s){return console.error("Song pref clear error:",s),!1}});const me=S.join(f.app.getPath("userData"),"lyrics-preferences.json"),ke=()=>{try{if(w.existsSync(me)){const s=w.readFileSync(me,"utf-8");return JSON.parse(s)}}catch(s){console.error("Error loading lyrics preferences:",s)}return{}},Be=s=>{try{w.writeFileSync(me,JSON.stringify(s,null,2))}catch(t){console.error("Error saving lyrics preferences:",t)}};f.ipcMain.handle("lyrics-pref-get",async(s,t)=>{try{return ke()[t]||null}catch(e){return console.error("Lyrics pref get error:",e),null}});f.ipcMain.handle("lyrics-pref-set",async(s,t,e)=>{try{const r=ke();return r[t]={...e,savedAt:Date.now()},Be(r),console.log(`[LyricsPref] Saved preference for: ${t}`),!0}catch(r){return console.error("Lyrics pref set error:",r),!1}});f.ipcMain.handle("lyrics-pref-delete",async(s,t)=>{try{const e=ke();return e[t]&&(delete e[t],Be(e),console.log(`[LyricsPref] Deleted preference for: ${t}`)),!0}catch(e){return console.error("Lyrics pref delete error:",e),!1}});const ye=S.join(f.app.getPath("userData"),"saved-playlists.json"),le=()=>{try{if(w.existsSync(ye)){const s=w.readFileSync(ye,"utf-8");return JSON.parse(s)}}catch(s){console.error("Error loading saved playlists:",s)}return[]},Ye=s=>{try{w.writeFileSync(ye,JSON.stringify(s,null,2))}catch(t){console.error("Error saving playlists:",t)}};f.ipcMain.handle("saved-playlists-get",async()=>{try{return le()}catch(s){return console.error("Saved playlists get error:",s),[]}});f.ipcMain.handle("saved-playlists-add",async(s,t)=>{try{const e=le();return e.some(r=>r.id===t.id)?(console.log(`[Library] Playlist already saved: ${t.name}`),!0):(e.unshift({...t,savedAt:Date.now()}),Ye(e),console.log(`[Library] Added playlist: ${t.name}`),!0)}catch(e){return console.error("Saved playlists add error:",e),!1}});f.ipcMain.handle("saved-playlists-remove",async(s,t)=>{try{const r=le().filter(n=>n.id!==t);return Ye(r),console.log(`[Library] Removed playlist: ${t}`),!0}catch(e){return console.error("Saved playlists remove error:",e),!1}});f.ipcMain.handle("saved-playlists-check",async(s,t)=>{try{return le().some(r=>r.id===t)}catch(e){return console.error("Saved playlists check error:",e),!1}});const Z=S.join(f.app.getPath("userData"),"spotify-session.json"),We=s=>{try{w.writeFileSync(Z,JSON.stringify(s,null,2)),console.log("[Spotify] Session saved")}catch(t){console.error("Error saving Spotify session:",t)}},je=()=>{try{if(w.existsSync(Z))return JSON.parse(w.readFileSync(Z,"utf-8"))}catch(s){console.error("Error loading Spotify session:",s)}return null};process.env.DIST=S.join(__dirname,"../dist");process.env.VITE_PUBLIC=f.app.isPackaged?process.env.DIST:S.join(__dirname,"../public");let T,G=null;const Ie=process.env.VITE_DEV_SERVER_URL,Ve=!f.app.isPackaged,os=S.join(process.resourcesPath,"bin","yt-dlp.exe"),is=S.join(__dirname,"../bin/yt-dlp.exe"),F=Ve?is:os;!Ve&&!w.existsSync(F)&&f.dialog.showErrorBox("Critical Error",`yt-dlp.exe missing at:
-${F}`);const L="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",D=s=>new Promise((t,e)=>{re.execFile(F,s,{maxBuffer:1024*1024*10},(r,n,o)=>{if(r){console.error("yt-dlp error:",o),e(r);return}try{const i=JSON.parse(n);t(i)}catch(i){console.error("JSON Parse Error:",i),e(i)}})}),ge=new Map;function qe(){if(ss(),T=new f.BrowserWindow({width:1200,height:800,minWidth:900,minHeight:600,icon:S.join(process.env.VITE_PUBLIC||"","electron-vite.svg"),autoHideMenuBar:!0,frame:!1,titleBarStyle:"hidden",titleBarOverlay:{color:"#121212",symbolColor:"#ffffff",height:40},backgroundColor:"#121212",webPreferences:{preload:S.join(__dirname,"preload.js"),nodeIntegration:!1,contextIsolation:!0,webSecurity:!1}}),T.setMenuBarVisibility(!1),f.app.isPackaged&&T.webContents.on("before-input-event",(s,t)=>{t.key==="F12"&&s.preventDefault(),t.control&&t.shift&&["I","J","C"].includes(t.key)&&s.preventDefault()}),T.webContents.on("did-finish-load",()=>{T?.webContents.send("main-process-message",new Date().toLocaleString())}),T.webContents.session.webRequest.onBeforeSendHeaders({urls:["*://*.youtube.com/*","*://*.googlevideo.com/*"]},(s,t)=>{const{requestHeaders:e}=s;Object.keys(e).forEach(r=>{(r.toLowerCase()==="referer"||r.toLowerCase()==="origin")&&delete e[r]}),e.Referer="https://www.youtube.com/",e.Origin="https://www.youtube.com",e["User-Agent"]=L,t({requestHeaders:e})}),T.webContents.session.webRequest.onBeforeSendHeaders({urls:["https://open.spotify.com/get_access_token*"]},(s,t)=>{t({requestHeaders:s.requestHeaders})}),T.webContents.session.on("will-download",(s,t,e)=>{const r=t.getURL(),n=ge.get(r)||{filename:"audio.mp3",saveAs:!1};if(n.filename&&t.setSavePath(S.join(f.app.getPath("downloads"),n.filename)),n.saveAs){const o=f.dialog.showSaveDialogSync(T,{defaultPath:n.filename,filters:[{name:"Audio Files",extensions:["mp3","m4a"]}]});if(o)t.setSavePath(o);else{t.cancel();return}}t.on("updated",(o,i)=>{i==="progressing"&&!t.isPaused()&&T?.webContents.send("download-progress",{url:r,progress:t.getReceivedBytes()/t.getTotalBytes(),received:t.getReceivedBytes(),total:t.getTotalBytes()})}),t.on("done",(o,i)=>{ge.delete(r),T?.webContents.send("download-complete",{url:r,state:i,path:t.getSavePath()})})}),Ie?T.loadURL(Ie):T.loadFile(S.join(process.env.DIST||"","index.html")),!G){const s=process.env.VITE_PUBLIC||"",t=S.join(s,"icon.ico"),e=S.join(s,"icon.png");console.log("[Tray] Looking for icons at:",{iconIco:t,iconPng:e});let r=null;if(w.existsSync(t)?(console.log("[Tray] Found .ico"),r=f.nativeImage.createFromPath(t)):w.existsSync(e)?(console.log("[Tray] Found .png"),r=f.nativeImage.createFromPath(e).resize({width:16,height:16})):(console.log("[Tray] No icon found, using fallback base64"),r=f.nativeImage.createFromDataURL("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADfSURBVDiNpZMxDoJAEEXfLhYmFjZewMbGxMQLeBN7C2+gd7Cx9AYcwNLL2GhjZ2dBQmICsptQCJBlJ5Ns8f/szOwfYKG1fkhBLoANsAMiYGcavsLME7AH4tQnhMBDAGugBlrmWQEBsAXutNYnM/8K7A1rlFJlEi+B+H8MEbABbrXWRynnBRb/JQihYg4wBrrm/hxomLlvYEFmDuwDG6BttN4FXGQZEAPXQNnMbcKQKaVKJdADQq31ycRChh4wABpG6x0hjYGhuT8DamYOZv6aWMjLwNDcHwNV8/cBeAe/iyFO7WBXRQAAAABJRU5ErkJggg==")),r){G=new f.Tray(r),G.setToolTip("Ragam Music Player");const n=f.Menu.buildFromTemplate([{label:"Show App",click:()=>{T&&(T.show(),T.focus())}},{label:"Minimize to Tray",click:()=>{T?.hide()}},{type:"separator"},{label:"Play/Pause",click:()=>{T?.webContents.send("tray-playpause")}},{label:"Next Track",click:()=>{T?.webContents.send("tray-next")}},{label:"Previous Track",click:()=>{T?.webContents.send("tray-previous")}},{type:"separator"},{label:"Quit",click:()=>{f.app.quit()}}]);G.setContextMenu(n),G.on("double-click",()=>{T&&(T.show(),T.focus())})}}}f.ipcMain.handle("youtube-search-video",async(s,t)=>{try{console.log(`[YouTube Video Search] Searching: ${t}`);const e=[`ytsearch5:${t}`,"--dump-single-json","--flat-playlist","--no-warnings","--no-check-certificate"],r=await D(e);return!r||!r.entries?[]:r.entries.map(n=>({id:n.id,title:n.title,thumbnail:`https://i.ytimg.com/vi/${n.id}/hqdefault.jpg`,channel:n.uploader,duration:n.duration}))}catch(e){return console.error("[YouTube Video Search] Error:",e),[]}});f.ipcMain.handle("youtube-search",async(s,t,e="US")=>{try{console.log(`[YouTube Music] Searching: ${t} (Region: ${e})`);const n=[`https://music.youtube.com/search?q=${encodeURIComponent(t)}`,"--dump-single-json","--playlist-items","1,2,3,4,5,6,7,8,9,10","--flat-playlist","--no-warnings","--no-check-certificate","--geo-bypass-country",e],o=await D(n);return!o||!o.entries?[]:o.entries.map(i=>({id:i.id,title:i.title,channelTitle:i.uploader||i.artist||"YouTube Music",duration:i.duration,thumbnail:`https://i.ytimg.com/vi/${i.id}/hqdefault.jpg`,artists:[{name:i.uploader||i.artist||"Unknown"}]}))}catch(r){console.warn("YTM Search failed, falling back to standard ytsearch:",r.message);try{const o=await D([t,"--dump-single-json","--default-search","ytsearch5:","--flat-playlist","--no-warnings","--no-check-certificate","--geo-bypass-country",e]);return!o||!o.entries?[]:o.entries.map(i=>({id:i.id,title:i.title,channelTitle:i.uploader,duration:i.duration,thumbnail:`https://i.ytimg.com/vi/${i.id}/hqdefault.jpg`,artists:[{name:i.uploader}]}))}catch(n){return console.error("Fallback Search Error:",n),[]}}});f.ipcMain.handle("youtube-stream",async(s,t,e="high")=>{try{console.log(`[YouTube] Fetching Stream for: ${t} (Quality: ${e})`);const r=`https://www.youtube.com/watch?v=${t}`;let n="bestaudio/best";e==="medium"?n="bestaudio[abr<=128]/bestaudio":e==="low"&&(n="worstaudio");const i=await D([r,"--dump-single-json","--no-warnings","--no-check-certificate","--format",n]);if(!i||!i.url)throw new Error("No stream URL found");return console.log(`[YouTube] Returning direct audio URL for: ${t}`),{url:i.url,duration:i.duration,title:i.title}}catch(r){return console.error("[YouTube] Stream Extraction Error:",r),null}});f.ipcMain.handle("youtube-video-url",async(s,t)=>{try{console.log(`[YouTube] Fetching HLS Stream for: ${t}`);const r=[`https://www.youtube.com/watch?v=${t}`,"--dump-single-json","--no-warnings","--no-check-certificate"],n=await D(r);let o=n.manifest_url;if(!o&&n.formats){const i=n.formats.find(a=>a.protocol==="m3u8"||a.protocol==="m3u8_native");i&&(o=i.url)}if(!o){console.log("No HLS found, falling back to MP4");const i=n.formats.reverse().find(a=>a.ext==="mp4"&&a.acodec!=="none"&&a.vcodec!=="none");o=i?i.url:n.url}if(!o)throw new Error("No video stream found");return{url:o,title:n.title,isHls:o.includes(".m3u8")}}catch(e){return console.error("[YouTube] Video Stream Error:",e),null}});f.ipcMain.handle("youtube-video-stream",async(s,t,e=1080)=>{try{console.log(`[YouTube] Fetching Video Stream for: ${t} (Max Height: ${e}p)`);const r=`https://www.youtube.com/watch?v=${t}`,o=await D([r,"--dump-single-json","--no-warnings","--no-check-certificate","--user-agent",L]);if(!o)throw new Error("No data returned from yt-dlp");let i=o.manifest_url;if(!i&&o.formats){const p=o.formats.find(m=>m.protocol==="m3u8"||m.protocol==="m3u8_native"||m.url&&m.url.includes(".m3u8"));p&&(i=p.url)}if(i)return console.log("[YouTube] Found HLS manifest for adaptive quality"),{type:"hls",url:`http://localhost:${x}/proxy?url=${encodeURIComponent(i)}`,isHls:!0,title:o.title,duration:o.duration,thumbnail:o.thumbnail,qualities:["auto","1080p","720p","480p","360p","240p"]};console.log("[YouTube] No native HLS, using yt-dlp piped streaming");const a=o.formats?.filter(p=>p.vcodec!=="none"&&p.height&&p.height>=144).sort((p,m)=>(m.height||0)-(p.height||0))||[],c=new Set(a.map(p=>p.height)),l=Array.from(c).filter(p=>p&&p>=144).sort((p,m)=>m-p);if(l.length>0){const p=l.find(b=>b<=e)||l[l.length-1],m=l.map(b=>`${b}p`),g=`http://localhost:${x}/stream?id=${t}&quality=${p}`;return console.log(`[YouTube] Returning ${p}p piped stream (${m.length} qualities: ${m.slice(0,5).join(", ")}...)`),{type:"muxed",url:g,isHls:!1,height:p,format:"webm",title:o.title,duration:o.duration,thumbnail:o.thumbnail,qualities:m}}console.log("[YouTube] No formats available, trying fallback formats 22/18");const d=await D([r,"--dump-single-json","--no-warnings","--no-check-certificate","--format","22/18","--user-agent",L]);if(d?.url)return{type:"muxed",url:`http://localhost:${x}/proxy?url=${encodeURIComponent(d.url)}`,isHls:!1,height:d.height||360,format:"mp4",title:d.title,duration:d.duration,thumbnail:d.thumbnail,qualities:[`${d.height||360}p`]};throw new Error("No video URL found")}catch(r){return console.error("[YouTube] Video Stream Error:",r),null}});f.ipcMain.handle("download-start",async(s,{url:t,filename:e,saveAs:r})=>{try{return ge.set(t,{filename:e,saveAs:r}),T?.webContents.downloadURL(t),{success:!0}}catch(n){return{success:!1,error:n.message}}});f.ipcMain.handle("spotify-login",async()=>new Promise((s,t)=>{const e=new f.BrowserWindow({width:800,height:600,show:!0,autoHideMenuBar:!0,webPreferences:{nodeIntegration:!1,contextIsolation:!0,partition:"persist:spotify_login",webSecurity:!1}}),r=e.webContents.session;r.webRequest.onBeforeRequest({urls:["*://*.spotify.com/*/service-worker.js"]},(c,l)=>{l({cancel:!0})}),e.loadURL("https://accounts.spotify.com/en/login");let n=!1,o=null;const a=setInterval(async()=>{if(!(n||e.isDestroyed()))try{const c=e.webContents.getURL();if(c.includes("accounts.spotify.com/en/status")||c.includes("open.spotify.com")){if(c.includes("accounts.spotify.com")){console.log("[Spotify Auth] Redirecting to open.spotify.com"),e.loadURL("https://open.spotify.com/");return}const l=await r.cookies.get({name:"sp_dc",url:"https://open.spotify.com"});if(l.length===0){console.log("[Spotify Auth] No sp_dc cookie yet, retrying...");return}o=l[0].value,console.log("[Spotify Auth] Got sp_dc cookie, length:",o.length),clearInterval(a),console.log("[Spotify Auth] Using TOTP authentication...");try{const u=await B.loginWithSpDc(o);if(u.success&&u.accessToken){console.log("[Spotify Auth] TOTP login successful");const d={accessToken:u.accessToken,accessTokenExpirationTimestampMs:u.expiration||Date.now()+36e5,clientId:"",isAnonymous:!1,spDcCookie:o,savedAt:Date.now()};We(d),n=!0,s(d),setTimeout(()=>{e.isDestroyed()||e.close()},500)}else throw new Error(u.error||"TOTP login failed")}catch(u){console.error("[Spotify Auth] TOTP error:",u),t(new Error(`Token fetch failed: ${u.message}`)),e.close()}}}catch(c){console.error("[Spotify Auth] Check error:",c)}},1e3);e.on("closed",()=>{clearInterval(a),n||t(new Error("Login cancelled by user"))})}));f.ipcMain.handle("spotify-refresh-token",async(s,t)=>{if(!t){const e=je();if(!e)return{success:!1,error:"No stored session"};t=e.spDcCookie}console.log("[Spotify Refresh] Using TOTP authentication...");try{const e=await B.loginWithSpDc(t);if(e.success&&e.accessToken){const r={accessToken:e.accessToken,accessTokenExpirationTimestampMs:e.expiration||Date.now()+36e5,clientId:"",isAnonymous:!1,spDcCookie:t,savedAt:Date.now()};return We(r),{success:!0,accessToken:e.accessToken,accessTokenExpirationTimestampMs:e.expiration}}else return{success:!1,error:e.error}}catch(e){return console.error("[Spotify Refresh] TOTP error:",e),{success:!1,error:e.message}}});f.ipcMain.handle("spotify-check-session",async()=>{const s=je();return s&&Date.now()<s.accessTokenExpirationTimestampMs?{success:!0,...s}:{success:!1}});f.ipcMain.handle("spotify-logout",async()=>(w.existsSync(Z)&&w.unlinkSync(Z),{success:!0}));f.ipcMain.handle("ytmusic-login",async()=>new Promise((s,t)=>{const e=new f.BrowserWindow({width:900,height:700,show:!0,autoHideMenuBar:!0,webPreferences:{nodeIntegration:!1,contextIsolation:!0,partition:"persist:ytmusic_login",webSecurity:!1}}),r=e.webContents.session;e.loadURL("https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com/");let n=!1;const i=setInterval(async()=>{if(!(n||e.isDestroyed()))try{if(e.webContents.getURL().includes("music.youtube.com")){const l=await r.cookies.get({url:"https://music.youtube.com"}),u=l.some(p=>p.name==="SID"),d=l.some(p=>p.name==="SAPISID"||p.name==="__Secure-3PAPISID");if(u&&d){const p=l.map(m=>`${m.name}=${m.value}`).join("; ");console.log("[YTMusic Auth] Login detected! Cookies:",l.map(m=>m.name).join(", ")),n=!0,clearInterval(i),Oe(p),setTimeout(()=>{e.isDestroyed()||e.close()},500),s({success:!0})}}}catch(a){console.error("[YTMusic Auth] Check error:",a)}},2e3);e.on("closed",()=>{clearInterval(i),n||t(new Error("Login cancelled by user"))})}));es();f.app.on("window-all-closed",()=>{process.platform!=="darwin"&&(f.app.quit(),T=null)});f.app.on("activate",()=>{f.BrowserWindow.getAllWindows().length===0&&qe()});f.app.whenReady().then(()=>{Ht(),It(),Et(),qe()});
+"use strict";
+const electron = require("electron");
+const path$1 = require("node:path");
+const fs$1 = require("node:fs");
+const http = require("node:http");
+const child_process = require("child_process");
+const events = require("events");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+const https = require("node:https");
+function _interopNamespaceDefault(e) {
+  const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
+  if (e) {
+    for (const k in e) {
+      if (k !== "default") {
+        const d = Object.getOwnPropertyDescriptor(e, k);
+        Object.defineProperty(n, k, d.get ? d : {
+          enumerable: true,
+          get: () => e[k]
+        });
+      }
+    }
+  }
+  n.default = e;
+  return Object.freeze(n);
+}
+const path__namespace = /* @__PURE__ */ _interopNamespaceDefault(path);
+const fs__namespace = /* @__PURE__ */ _interopNamespaceDefault(fs);
+const crypto__namespace = /* @__PURE__ */ _interopNamespaceDefault(crypto);
+let _sessionFile = null;
+const getSessionFile = () => {
+  if (!_sessionFile) {
+    _sessionFile = path.join(electron.app.getPath("userData"), "spotify-session.json");
+  }
+  return _sessionFile;
+};
+const NUANCE_URL = "https://gist.githubusercontent.com/saraansx/a622d4c1a12c36afdcf701201e9482a3/raw/9afe2c9c7d1a5eb3f7a05d0002a94f45b73682d0/nuance.json";
+class SpotifyAuthEndpoint extends events.EventEmitter {
+  _spDc = null;
+  _accessToken = null;
+  _expiration = 0;
+  _nuance = null;
+  constructor() {
+    super();
+    this._loadSession();
+  }
+  get accessToken() {
+    return this._accessToken;
+  }
+  get expiration() {
+    return this._expiration;
+  }
+  get spDc() {
+    return this._spDc;
+  }
+  _loadSession() {
+    try {
+      if (fs.existsSync(getSessionFile())) {
+        const data = JSON.parse(fs.readFileSync(getSessionFile(), "utf-8"));
+        this._spDc = data.spDcCookie;
+        this._accessToken = data.accessToken;
+        this._expiration = data.expiration;
+        if (this.isAuthenticated()) {
+          console.log("[SpotifyAuth] Recovered session from disk");
+          this.emit("recovered");
+        }
+      }
+    } catch (error) {
+      console.error("[SpotifyAuth] Failed to load session:", error);
+    }
+  }
+  _saveSession() {
+    try {
+      const session = {
+        spDcCookie: this._spDc || "",
+        accessToken: this._accessToken || "",
+        expiration: this._expiration,
+        savedAt: Date.now()
+      };
+      fs.writeFileSync(getSessionFile(), JSON.stringify(session, null, 2));
+    } catch (error) {
+      console.error("[SpotifyAuth] Failed to save session:", error);
+    }
+  }
+  isAuthenticated() {
+    return !!this._accessToken && this._expiration > Date.now();
+  }
+  async loginWithSpDc(spDcCookie) {
+    try {
+      this._spDc = spDcCookie;
+      console.log("[SpotifyAuth] Starting TOTP login...");
+      if (!this._nuance) {
+        await this._fetchNuance();
+      }
+      const serverTime = await this._getServerTime();
+      const totp = this._generateTotp(serverTime);
+      console.log(`[SpotifyAuth] Using TOTP v${this._nuance?.v || 0}...`);
+      const result = await this._fetchToken(totp);
+      if (result.accessToken) {
+        this._accessToken = result.accessToken;
+        this._expiration = result.accessTokenExpirationTimestampMs || Date.now() + 36e5;
+        this._saveSession();
+        this.emit("login", { accessToken: this._accessToken });
+        console.log("[SpotifyAuth] Login successful!");
+        return {
+          success: true,
+          accessToken: this._accessToken ?? void 0,
+          expiration: this._expiration
+        };
+      } else {
+        throw new Error(result.error || "No access token in response");
+      }
+    } catch (error) {
+      console.error("[SpotifyAuth] Login failed:", error.message);
+      return { success: false, error: error.message };
+    }
+  }
+  async refreshCredentials() {
+    if (!this._spDc) {
+      return { success: false, error: "No sp_dc cookie stored" };
+    }
+    return this.loginWithSpDc(this._spDc);
+  }
+  logout() {
+    this._spDc = null;
+    this._accessToken = null;
+    this._expiration = 0;
+    try {
+      if (fs.existsSync(getSessionFile())) {
+        fs.unlinkSync(getSessionFile());
+      }
+    } catch {
+    }
+    this.emit("logout");
+  }
+  async _fetchNuance() {
+    try {
+      const fetch2 = (await Promise.resolve().then(() => require("./index-CCtAWcID.js"))).default;
+      const response = await fetch2(NUANCE_URL, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch nuance: ${response.status}`);
+      }
+      const data = await response.json();
+      data.sort((a, b) => (b.v || 0) - (a.v || 0));
+      const latest = data[0];
+      if (latest && latest.s) {
+        this._nuance = { v: latest.v || 1, s: latest.s };
+        console.log(`[SpotifyAuth] Nuance fetched: v${this._nuance.v}`);
+      } else {
+        throw new Error("Invalid nuance format");
+      }
+    } catch (error) {
+      console.warn("[SpotifyAuth] Nuance fetch failed, using fallback:", error.message);
+      this._nuance = { v: 5, s: "GVPZVYTFNAZ27PYEXKQ7X5YAFGC3CHBD" };
+    }
+  }
+  async _getServerTime() {
+    try {
+      const fetch2 = (await Promise.resolve().then(() => require("./index-CCtAWcID.js"))).default;
+      const response = await fetch2("https://open.spotify.com/api/server-time", {
+        headers: {
+          "Cookie": `sp_dc=${this._spDc}`,
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return data.serverTime || Math.floor(Date.now() / 1e3);
+      }
+    } catch {
+    }
+    return Math.floor(Date.now() / 1e3);
+  }
+  _generateTotp(serverTimeSeconds) {
+    const secret = this._nuance?.s || "GVPZVYTFNAZ27PYEXKQ7X5YAFGC3CHBD";
+    const timeStep = Math.floor(serverTimeSeconds / 30);
+    const base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let bits = "";
+    for (const char of secret.toUpperCase()) {
+      const idx = base32Chars.indexOf(char);
+      if (idx >= 0) {
+        bits += idx.toString(2).padStart(5, "0");
+      }
+    }
+    const keyBytes = Buffer.alloc(Math.floor(bits.length / 8));
+    for (let i = 0; i < keyBytes.length; i++) {
+      keyBytes[i] = parseInt(bits.substring(i * 8, (i + 1) * 8), 2);
+    }
+    const timeBuffer = Buffer.alloc(8);
+    timeBuffer.writeBigInt64BE(BigInt(timeStep));
+    const hmac = crypto.createHmac("sha1", keyBytes);
+    hmac.update(timeBuffer);
+    const hash = hmac.digest();
+    const offset = hash[hash.length - 1] & 15;
+    const code = (hash[offset] & 127) << 24 | (hash[offset + 1] & 255) << 16 | (hash[offset + 2] & 255) << 8 | hash[offset + 3] & 255;
+    return (code % 1e6).toString().padStart(6, "0");
+  }
+  async _fetchToken(totp) {
+    const totpVer = this._nuance?.v || 5;
+    const url = `https://open.spotify.com/api/token?reason=transport&productType=web-player&totp=${totp}&totpServer=${totp}&totpVer=${totpVer}`;
+    console.log(`[SpotifyAuth] Fetching token from: /api/token?...totpVer=${totpVer}`);
+    return new Promise((resolve, reject) => {
+      const request = electron.net.request({
+        method: "GET",
+        url,
+        useSessionCookies: false
+      });
+      request.setHeader("Cookie", `sp_dc=${this._spDc}`);
+      request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+      request.setHeader("Accept", "application/json");
+      request.setHeader("Accept-Language", "en-US,en;q=0.9");
+      request.setHeader("Referer", "https://open.spotify.com/");
+      request.setHeader("Origin", "https://open.spotify.com");
+      let responseData = "";
+      request.on("response", (response) => {
+        if (response.statusCode !== 200) {
+          let errorText = "";
+          response.on("data", (chunk) => {
+            errorText += chunk.toString();
+          });
+          response.on("end", () => {
+            console.error("[SpotifyAuth] Token error:", response.statusCode, errorText.substring(0, 200));
+            reject(new Error(`Token fetch failed: HTTP ${response.statusCode}`));
+          });
+          return;
+        }
+        response.on("data", (chunk) => {
+          responseData += chunk.toString();
+        });
+        response.on("end", () => {
+          try {
+            const data = JSON.parse(responseData);
+            if (data.accessToken) {
+              console.log("[SpotifyAuth] Got access token, length:", data.accessToken.length);
+            }
+            resolve(data);
+          } catch (e) {
+            reject(new Error("Failed to parse token response"));
+          }
+        });
+      });
+      request.on("error", (error) => {
+        reject(error);
+      });
+      request.end();
+    });
+  }
+}
+const spotifyAuth = new SpotifyAuthEndpoint();
+const GQL_ENDPOINT = "https://api-partner.spotify.com/pathfinder/v1/query";
+const API_ENDPOINT = "https://api.spotify.com/v1";
+const HASHES = {
+  profileAttributes: "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
+  fetchLibraryTracks: "087278b20b743578a6262c2b0b4bcd20d879c503cc359a2285baf083ef944240",
+  libraryV3: "2de10199b2441d6e4ae875f27d2db361020c399fb10b03951120223fbed10b08",
+  fetchPlaylist: "bb67e0af06e8d6f52b531f97468ee4acd44cd0f82b988e15c2ea47b1148efc77",
+  getAlbum: "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10",
+  getTrack: "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294",
+  queryArtistOverview: "446130b4a0aa6522a686aafccddb0ae849165b5e0436fd802f96e0243617b5d8",
+  searchDesktop: "4801118d4a100f756e833d33984436a3899cff359c532f8fd3aaf174b60b3b49",
+  searchTracks: "bc1ca2fcd0ba1013a0fc88e6cc4f190af501851e3dafd3e1ef85840297694428",
+  searchAlbums: "a71d2c993fc98e1c880093738a55a38b57e69cc4ce5a8c113e6c5920f9513ee2",
+  isCurated: "e4ed1f91a2cc5415befedb85acf8671dc1a4bf3ca1a5b945a6386101a22e28a6",
+  addToLibrary: "a3c1ff58e6a36fec5fe1e3a193dc95d9071d96b9ba53c5ba9c1494fb1ee73915",
+  removeFromLibrary: "a3c1ff58e6a36fec5fe1e3a193dc95d9071d96b9ba53c5ba9c1494fb1ee73915",
+  home: "d62af2714f2623c923cc9eeca4b9545b4363abaa9188a9e94e2b63b823419a2c"
+};
+async function gqlRequest(operationName, hash, variables = {}) {
+  const accessToken = spotifyAuth.accessToken;
+  if (!accessToken) {
+    throw new Error("Not authenticated");
+  }
+  const body = JSON.stringify({
+    variables,
+    operationName,
+    extensions: {
+      persistedQuery: {
+        version: 1,
+        sha256Hash: hash
+      }
+    }
+  });
+  return new Promise((resolve, reject) => {
+    const request = electron.net.request({
+      method: "POST",
+      url: GQL_ENDPOINT
+    });
+    request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    request.setHeader("Authorization", `Bearer ${accessToken}`);
+    request.setHeader("Content-Type", "application/json");
+    request.setHeader("Accept", "application/json");
+    request.setHeader("Origin", "https://open.spotify.com");
+    request.setHeader("Referer", "https://open.spotify.com/");
+    request.setHeader("Sec-Fetch-Dest", "empty");
+    request.setHeader("Sec-Fetch-Mode", "cors");
+    request.setHeader("Sec-Fetch-Site", "same-site");
+    request.setHeader("app-platform", "WebPlayer");
+    request.setHeader("spotify-app-version", "1.2.30.290.g183057e9");
+    let responseData = "";
+    request.on("response", (response) => {
+      response.on("data", (chunk) => {
+        responseData += chunk.toString();
+      });
+      response.on("end", () => {
+        try {
+          const data = JSON.parse(responseData);
+          if (data.errors) {
+            console.error("[GQL] Error:", data.errors[0]?.message);
+            reject(new Error(data.errors[0]?.message || "GraphQL error"));
+          } else {
+            resolve(data);
+          }
+        } catch (e) {
+          reject(new Error("Failed to parse GraphQL response"));
+        }
+      });
+    });
+    request.on("error", reject);
+    request.write(body);
+    request.end();
+  });
+}
+async function apiRequest(endpoint, retries = 3) {
+  const accessToken = spotifyAuth.accessToken;
+  if (!accessToken) {
+    throw new Error("Not authenticated");
+  }
+  return new Promise((resolve, reject) => {
+    const request = electron.net.request({
+      method: "GET",
+      url: `${API_ENDPOINT}${endpoint}`
+    });
+    request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    request.setHeader("Authorization", `Bearer ${accessToken}`);
+    request.setHeader("Accept", "application/json");
+    request.setHeader("Origin", "https://open.spotify.com");
+    request.setHeader("Referer", "https://open.spotify.com/");
+    request.setHeader("Sec-Fetch-Dest", "empty");
+    request.setHeader("Sec-Fetch-Mode", "cors");
+    request.setHeader("Sec-Fetch-Site", "same-site");
+    request.setHeader("app-platform", "WebPlayer");
+    request.setHeader("spotify-app-version", "1.2.30.290.g183057e9");
+    let responseData = "";
+    request.on("response", (response) => {
+      response.on("data", (chunk) => {
+        responseData += chunk.toString();
+      });
+      response.on("end", () => {
+        try {
+          if (response.statusCode === 429 && retries > 0) {
+            const retryAfter = parseInt(response.headers["retry-after"] || "1", 10);
+            console.warn(`[API] Rate Limited (429). Retrying after ${retryAfter}s...`);
+            setTimeout(() => {
+              apiRequest(endpoint, retries - 1).then(resolve).catch(reject);
+            }, retryAfter * 1e3);
+            return;
+          }
+          const data = JSON.parse(responseData);
+          if (data.error) {
+            if (data.error.status === 429 && retries > 0) {
+              console.warn(`[API] Rate Limited (JSON 429). Retrying...`);
+              setTimeout(() => {
+                apiRequest(endpoint, retries - 1).then(resolve).catch(reject);
+              }, 2e3);
+              return;
+            }
+            console.error("[API] Request failed:", data.error);
+            reject(new Error(data.error.message || `API Error ${data.error.status}`));
+            return;
+          }
+          resolve(data);
+        } catch (e) {
+          reject(new Error("Failed to parse API response"));
+        }
+      });
+    });
+    request.on("error", (err) => {
+      console.error("[API] Network Error:", err);
+      reject(err);
+    });
+    request.end();
+  });
+}
+async function getMe() {
+  const result = await gqlRequest("profileAttributes", HASHES.profileAttributes, {});
+  const user = result.data?.me?.profile;
+  if (!user) throw new Error("Failed to get user profile");
+  const userId = user.uri?.split(":").pop();
+  return {
+    id: userId,
+    display_name: user.name,
+    email: "unknown",
+    images: user.avatar?.sources || [],
+    uri: user.uri,
+    external_urls: { spotify: `https://open.spotify.com/user/${userId}` },
+    type: "user"
+  };
+}
+async function getSavedTracks(offset = 0, limit = 20) {
+  const result = await gqlRequest("fetchLibraryTracks", HASHES.fetchLibraryTracks, { offset, limit });
+  const library = result.data?.me?.library;
+  if (!library) throw new Error("Failed to get saved tracks");
+  const tracks = library.tracks?.items?.map((item) => {
+    const track = item.track?.data;
+    if (!track) return null;
+    const id = item.track?._uri?.split(":").pop();
+    const artists = track.artists?.items?.map((artist) => {
+      const artistId = artist.uri?.split(":").pop();
+      return {
+        id: artistId,
+        name: artist.profile?.name,
+        uri: artist.uri,
+        external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+      };
+    }) || [];
+    const albumId = track.albumOfTrack?.uri?.split(":").pop();
+    const trackDuration = track.duration?.totalMilliseconds || 0;
+    return {
+      track: {
+        id,
+        name: track.name,
+        uri: `spotify:track:${id}`,
+        duration_ms: trackDuration,
+        artists,
+        album: {
+          id: albumId,
+          name: track.albumOfTrack?.name,
+          images: track.albumOfTrack?.coverArt?.sources || [],
+          external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+        },
+        external_urls: { spotify: `https://open.spotify.com/track/${id}` }
+      }
+    };
+  }).filter(Boolean) || [];
+  return {
+    items: tracks,
+    total: library.tracks?.totalCount || 0,
+    offset,
+    limit,
+    next: tracks.length === limit ? `offset=${offset + limit}` : null
+  };
+}
+async function getSavedPlaylists(offset = 0, limit = 20) {
+  const result = await gqlRequest("libraryV3", HASHES.libraryV3, {
+    filters: ["Playlists"],
+    order: null,
+    textFilter: "",
+    features: ["LIKED_SONGS", "YOUR_EPISODES_V2", "PRERELEASES", "EVENTS"],
+    limit,
+    offset,
+    flatten: false,
+    expandedFolders: [],
+    folderUri: null,
+    includeFoldersWhenFlattening: true
+  });
+  const libraryData = result.data?.me?.libraryV3;
+  if (!libraryData) throw new Error("Failed to get playlists");
+  const items = libraryData.items?.filter(
+    (item) => item.item?.__typename === "PlaylistResponseWrapper" && item.item?.data?.__typename === "Playlist"
+  ).map((item) => {
+    const id = item.item?._uri?.split(":").pop();
+    const playlist = item.item?.data;
+    const owner = playlist?.ownerV2?.data;
+    return {
+      id,
+      name: playlist?.name,
+      description: playlist?.description,
+      images: playlist?.images?.items?.flatMap((img) => img.sources) || [],
+      uri: item.item?._uri,
+      external_urls: { spotify: `https://open.spotify.com/playlist/${id}` },
+      owner: {
+        id: owner?.id,
+        display_name: owner?.name,
+        uri: owner?.uri,
+        images: owner?.avatar?.sources || []
+      },
+      tracks: { total: 0 }
+      // Will be filled when fetching playlist details
+    };
+  }) || [];
+  return {
+    items,
+    total: libraryData.totalCount || 0,
+    offset: libraryData.pagingInfo?.offset || offset,
+    limit: libraryData.pagingInfo?.limit || limit
+  };
+}
+async function getPlaylist(playlistId) {
+  const result = await gqlRequest("fetchPlaylist", HASHES.fetchPlaylist, {
+    uri: `spotify:playlist:${playlistId}`,
+    offset: 0,
+    limit: 25,
+    enableWatchFeedEntrypoint: true
+  });
+  const playlist = result.data?.playlistV2;
+  if (!playlist) throw new Error("Failed to get playlist");
+  const owner = playlist.ownerV2?.data;
+  return {
+    id: playlistId,
+    name: playlist.name,
+    description: playlist.description,
+    collaborative: (playlist.members?.items?.length || 0) > 1,
+    public: true,
+    images: playlist.images?.items?.[0]?.sources || [],
+    uri: `spotify:playlist:${playlistId}`,
+    external_urls: { spotify: `https://open.spotify.com/playlist/${playlistId}` },
+    owner: {
+      id: owner?.uri?.split(":").pop(),
+      display_name: owner?.name,
+      uri: owner?.uri,
+      images: owner?.avatar?.sources || []
+    },
+    followers: playlist.followers,
+    tracks: {
+      total: playlist.content?.totalCount || 0
+    }
+  };
+}
+async function getPlaylistTracks(playlistId, offset = 0, limit = 25) {
+  const result = await gqlRequest("fetchPlaylist", HASHES.fetchPlaylist, {
+    uri: `spotify:playlist:${playlistId}`,
+    offset,
+    limit,
+    enableWatchFeedEntrypoint: false
+  });
+  const playlist = result.data?.playlistV2;
+  if (!playlist) throw new Error("Failed to get playlist tracks");
+  const tracks = playlist.content?.items?.map((trackWrapper) => {
+    const item = trackWrapper.itemV2?.data;
+    if (!item) return null;
+    if (Math.random() < 0.05) {
+      console.log("[GQL] Playlist Track Item Keys:", Object.keys(item));
+      console.log("[GQL] Playlist Track Duration:", JSON.stringify(item.duration));
+    }
+    const trackId = item.uri?.split(":").pop();
+    const trackArtists = item.artists?.items?.map((artist) => {
+      const artistId = artist.uri?.split(":").pop();
+      return {
+        id: artistId,
+        uri: artist.uri,
+        name: artist.profile?.name,
+        external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+      };
+    }) || [];
+    const albumId = item.albumOfTrack?.uri?.split(":").pop();
+    const durationMs = item.duration?.totalMilliseconds || item.trackDuration?.totalMilliseconds || 0;
+    return {
+      id: trackId,
+      uri: item.uri,
+      name: item.name,
+      album: {
+        album_type: "album",
+        id: albumId,
+        name: item.albumOfTrack?.name,
+        images: item.albumOfTrack?.coverArt?.sources || [],
+        external_urls: { spotify: `https://open.spotify.com/album/${albumId}` },
+        artists: [trackArtists[0]]
+      },
+      artists: trackArtists,
+      duration_ms: durationMs,
+      external_urls: { spotify: `https://open.spotify.com/track/${trackId}` }
+    };
+  }).filter(Boolean) || [];
+  return {
+    items: tracks.map((track) => ({ track })),
+    total: playlist.content?.totalCount || 0,
+    offset,
+    limit,
+    next: tracks.length === limit ? `offset=${offset + limit}` : null
+  };
+}
+async function searchAll(query, offset = 0, limit = 10) {
+  const result = await gqlRequest("searchDesktop", HASHES.searchDesktop, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 5,
+    includeAudiobooks: false,
+    includeArtistHasConcertsField: false,
+    includePreReleases: false,
+    includeLocalConcertsField: false,
+    includeAuthors: false
+  });
+  const searchData = result.data?.searchV2;
+  if (!searchData) throw new Error("Search failed");
+  return {
+    tracks: convertSearchTracks(searchData.tracksV2?.items || []),
+    albums: convertSearchAlbums(searchData.albumsV2?.items || []),
+    artists: convertSearchArtists(searchData.artists?.items || []),
+    playlists: convertSearchPlaylists(searchData.playlists?.items || [])
+  };
+}
+async function searchTracks(query, offset = 0, limit = 20) {
+  const result = await gqlRequest("searchTracks", HASHES.searchTracks, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: true,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+  const searchData = result.data?.searchV2?.tracksV2;
+  if (!searchData) throw new Error("Track search failed");
+  return {
+    tracks: { items: convertSearchTracks(searchData.items || []) },
+    total: searchData.totalCount || 0,
+    offset: searchData.pagingInfo?.nextOffset || offset,
+    limit: searchData.pagingInfo?.limit || limit
+  };
+}
+async function searchAlbums(query, offset = 0, limit = 20) {
+  const result = await gqlRequest("searchAlbums", HASHES.searchAlbums, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: false,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+  const searchData = result.data?.searchV2?.albumsV2;
+  if (!searchData) throw new Error("Album search failed");
+  return {
+    albums: { items: convertSearchAlbums(searchData.items || []) },
+    total: searchData.totalCount || 0,
+    offset: searchData.pagingInfo?.nextOffset || offset,
+    limit: searchData.pagingInfo?.limit || limit
+  };
+}
+async function searchArtists(query, offset = 0, limit = 20) {
+  const result = await gqlRequest("searchDesktop", HASHES.searchDesktop, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: false,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+  const searchData = result.data?.searchV2;
+  if (!searchData) throw new Error("Artist search failed");
+  return {
+    artists: { items: convertSearchArtists(searchData.artists?.items || []) },
+    total: searchData.artists?.totalCount || 0,
+    offset,
+    limit
+  };
+}
+async function searchPlaylists(query, offset = 0, limit = 20) {
+  const result = await gqlRequest("searchDesktop", HASHES.searchDesktop, {
+    searchTerm: query,
+    offset,
+    limit,
+    numberOfTopResults: 20,
+    includeAudiobooks: false,
+    includeAuthors: false,
+    includePreReleases: false
+  });
+  const searchData = result.data?.searchV2;
+  if (!searchData) throw new Error("Playlist search failed");
+  return {
+    playlists: { items: convertSearchPlaylists(searchData.playlists?.items || []) },
+    total: searchData.playlists?.totalCount || 0,
+    offset,
+    limit
+  };
+}
+async function getAlbum(albumId) {
+  const result = await gqlRequest("getAlbum", HASHES.getAlbum, {
+    uri: `spotify:album:${albumId}`,
+    locale: "",
+    offset: 0,
+    limit: 50
+  });
+  const album = result.data?.albumUnion;
+  if (!album) {
+    console.error("[GQL] getAlbum returned null");
+    throw new Error("Failed to get album");
+  }
+  const artists = album.artists?.items?.map((artist) => {
+    const id = artist.uri?.split(":").pop();
+    return {
+      id,
+      uri: artist.uri,
+      name: artist.profile?.name,
+      external_urls: { spotify: `https://open.spotify.com/artist/${id}` },
+      images: artist.visuals?.avatarImage?.sources || []
+    };
+  }) || [];
+  const tracksV2 = album.tracksV2?.items || [];
+  const tracks = tracksV2.map((item) => {
+    const track = item.track;
+    const trackId = track.uri?.split(":").pop();
+    const trackArtists = track.artists?.items?.map((artist) => {
+      const id = artist.uri?.split(":").pop();
+      return {
+        id,
+        uri: artist.uri,
+        name: artist.profile?.name,
+        external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+      };
+    }) || [];
+    return {
+      id: trackId,
+      uri: track.uri,
+      name: track.name,
+      duration_ms: track.duration?.totalMilliseconds,
+      explicit: track.contentRating?.label === "EXPLICIT",
+      artists: trackArtists,
+      album: {
+        id: albumId,
+        name: album.name,
+        images: album.coverArt?.sources || [],
+        external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+      },
+      external_urls: { spotify: `https://open.spotify.com/track/${trackId}` },
+      externalUri: `https://open.spotify.com/track/${trackId}`
+      // Compat
+    };
+  });
+  return {
+    id: albumId,
+    name: album.name,
+    album_type: album.type?.toLowerCase(),
+    label: album.label,
+    release_date: album.date?.isoString,
+    release_date_precision: album.date?.precision || "day",
+    images: album.coverArt?.sources || [],
+    artists,
+    external_urls: { spotify: `https://open.spotify.com/album/${albumId}` },
+    externalUri: `https://open.spotify.com/album/${albumId}`,
+    // Compat
+    copyrights: album.copyrights?.copyright || [],
+    tracks: {
+      items: tracks,
+      total: album.tracksV2?.totalCount || 0
+    }
+  };
+}
+async function getAlbumTracks(albumId, offset = 0, limit = 50) {
+  const result = await gqlRequest("getAlbum", HASHES.getAlbum, {
+    uri: `spotify:album:${albumId}`,
+    locale: "",
+    offset,
+    limit
+  });
+  const album = result.data?.albumUnion;
+  if (!album) throw new Error("Failed to get album tracks");
+  const tracksV2 = album.tracksV2?.items || [];
+  const trackAlbum = {
+    id: albumId,
+    name: album.name,
+    images: album.coverArt?.sources || [],
+    external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+  };
+  const tracks = tracksV2.map((item) => {
+    const track = item.track;
+    const trackId = track.uri?.split(":").pop();
+    const trackArtists = track.artists?.items?.map((artist) => {
+      const id = artist.uri?.split(":").pop();
+      return {
+        id,
+        uri: artist.uri,
+        name: artist.profile?.name,
+        external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+      };
+    }) || [];
+    return {
+      id: trackId,
+      uri: track.uri,
+      name: track.name,
+      duration_ms: track.duration?.totalMilliseconds,
+      explicit: track.contentRating?.label === "EXPLICIT",
+      artists: trackArtists,
+      album: trackAlbum,
+      external_urls: { spotify: `https://open.spotify.com/track/${trackId}` },
+      externalUri: `https://open.spotify.com/track/${trackId}`
+      // Compat
+    };
+  });
+  return {
+    items: tracks,
+    total: album.tracksV2?.totalCount || 0,
+    offset,
+    limit,
+    next: tracks.length < limit ? null : `offset=${offset + limit}`
+  };
+}
+async function getArtist(artistId) {
+  const result = await gqlRequest("queryArtistOverview", HASHES.queryArtistOverview, {
+    uri: `spotify:artist:${artistId}`,
+    locale: ""
+  });
+  const artist = result.data?.artistUnion;
+  if (!artist) throw new Error("Failed to get artist");
+  return {
+    id: artistId,
+    name: artist.profile?.name,
+    uri: `spotify:artist:${artistId}`,
+    images: artist.visuals?.avatarImage?.sources || [],
+    followers: { total: artist.stats?.followers || 0 },
+    external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+  };
+}
+async function getArtistTopTracks(artistId) {
+  const result = await gqlRequest("queryArtistOverview", HASHES.queryArtistOverview, {
+    uri: `spotify:artist:${artistId}`,
+    locale: ""
+  });
+  const artist = result.data?.artistUnion;
+  if (!artist) throw new Error("Failed to get artist top tracks");
+  const tracks = artist.discography?.topTracks?.items?.map((item) => {
+    const track = item.track;
+    if (!track) return null;
+    const id = track.uri?.split(":").pop();
+    const artists = track.artists?.items?.map((a) => {
+      const artistId2 = a.uri?.split(":").pop();
+      return {
+        id: artistId2,
+        name: a.profile?.name,
+        uri: a.uri,
+        external_urls: { spotify: `https://open.spotify.com/artist/${artistId2}` }
+      };
+    }) || [];
+    const albumId = track.albumOfTrack?.uri?.split(":").pop();
+    return {
+      id,
+      name: track.name,
+      uri: track.uri,
+      duration_ms: track.duration?.totalMilliseconds,
+      artists,
+      album: {
+        id: albumId,
+        name: track.albumOfTrack?.name,
+        images: track.albumOfTrack?.coverArt?.sources || [],
+        external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+      },
+      external_urls: { spotify: `https://open.spotify.com/track/${id}` }
+    };
+  }).filter(Boolean) || [];
+  return { tracks };
+}
+async function getRelatedArtists(artistId) {
+  const result = await gqlRequest("queryArtistOverview", HASHES.queryArtistOverview, {
+    uri: `spotify:artist:${artistId}`,
+    locale: ""
+  });
+  const artist = result.data?.artistUnion;
+  if (!artist) throw new Error("Failed to get related artists");
+  const related = artist.relatedContent?.relatedArtists?.items?.map((item) => {
+    const id = item.uri?.split(":").pop();
+    return {
+      id,
+      name: item.profile?.name,
+      uri: item.uri,
+      images: item.visuals?.avatarImage?.sources || [],
+      external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+    };
+  }).filter(Boolean) || [];
+  return { artists: related };
+}
+async function getTrack(trackId) {
+  const result = await gqlRequest("getTrack", HASHES.getTrack, {
+    uri: `spotify:track:${trackId}`
+  });
+  const track = result.data?.trackUnion;
+  if (!track) throw new Error("Failed to get track");
+  const allArtists = [
+    ...track.firstArtist?.items || [],
+    ...track.otherArtists?.items || []
+  ];
+  const artists = allArtists.map((artist) => {
+    const id = artist.uri?.split(":").pop();
+    return {
+      id,
+      name: artist.profile?.name,
+      uri: artist.uri,
+      external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+    };
+  });
+  const albumId = track.albumOfTrack?.uri?.split(":").pop();
+  return {
+    id: track.id,
+    name: track.name,
+    uri: track.uri,
+    duration_ms: track.duration?.totalMilliseconds,
+    artists,
+    album: {
+      id: albumId || track.albumOfTrack?.id,
+      name: track.albumOfTrack?.name,
+      images: track.albumOfTrack?.coverArt?.sources || [],
+      album_type: track.albumOfTrack?.type?.toLowerCase(),
+      release_date: track.albumOfTrack?.date?.isoString,
+      external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+    },
+    external_urls: { spotify: `https://open.spotify.com/track/${track.id}` }
+  };
+}
+async function checkSavedTracks(trackIds) {
+  const result = await gqlRequest("isCurated", HASHES.isCurated, {
+    uris: trackIds.map((id) => `spotify:track:${id}`)
+  });
+  const lookup = result.data?.lookup || [];
+  return lookup.filter((item) => item.data?.__typename === "Track").map((item) => item.data?.isCurated || false);
+}
+async function saveTracks(trackIds) {
+  return gqlRequest("addToLibrary", HASHES.addToLibrary, {
+    uris: trackIds.map((id) => `spotify:track:${id}`)
+  });
+}
+async function removeTracks(trackIds) {
+  return gqlRequest("removeFromLibrary", HASHES.removeFromLibrary, {
+    uris: trackIds.map((id) => `spotify:track:${id}`)
+  });
+}
+async function getRecommendations(seeds, limit = 10) {
+  const params = new URLSearchParams();
+  if (seeds.seed_tracks && seeds.seed_tracks.length > 0) {
+    params.append("seed_tracks", seeds.seed_tracks.join(","));
+  }
+  if (seeds.seed_artists && seeds.seed_artists.length > 0) {
+    params.append("seed_artists", seeds.seed_artists.join(","));
+  }
+  if (seeds.seed_genres && seeds.seed_genres.length > 0) {
+    params.append("seed_genres", seeds.seed_genres.join(","));
+  }
+  params.append("limit", limit.toString());
+  const result = await apiRequest(`/recommendations?${params.toString()}`);
+  if (!result.tracks) {
+    throw new Error("Failed to get recommendations");
+  }
+  return result.tracks.map((track) => ({
+    id: track.id,
+    name: track.name,
+    uri: track.uri,
+    duration_ms: track.duration_ms,
+    artists: track.artists.map((artist) => ({
+      id: artist.id,
+      name: artist.name,
+      uri: artist.uri,
+      external_urls: artist.external_urls
+    })),
+    album: {
+      id: track.album.id,
+      name: track.album.name,
+      images: track.album.images,
+      external_urls: track.album.external_urls
+    },
+    external_urls: track.external_urls
+  }));
+}
+async function getHome$1(timeZone = "Asia/Kolkata", limit = 20) {
+  const result = await gqlRequest("home", HASHES.home, {
+    timeZone,
+    sp_t: "",
+    facet: "",
+    sectionItemsLimit: limit
+  });
+  const homeData = result.data?.home;
+  if (!homeData) return [];
+  const sections = homeData.sectionContainer?.sections?.items || [];
+  return sections.filter(
+    (section) => section.data?.__typename === "HomeGenericSectionData" && section.sectionItems?.items?.length > 0
+  ).map((section) => {
+    const id = section.uri?.split(":").pop();
+    const items = section.sectionItems?.items?.map((item) => {
+      const wrapperType = item.content?.__typename;
+      const contentType = item.content?.data?.__typename;
+      if (wrapperType === "PlaylistResponseWrapper" && contentType === "Playlist") {
+        const playlist = item.content.data;
+        const playlistId = playlist.uri?.split(":").pop();
+        const owner = playlist.ownerV2?.data;
+        return {
+          type: "playlist",
+          id: playlistId,
+          name: playlist.name,
+          description: playlist.description,
+          images: playlist.images?.items?.flatMap((img) => img.sources) || [],
+          uri: playlist.uri,
+          external_urls: { spotify: `https://open.spotify.com/playlist/${playlistId}` },
+          owner: {
+            id: owner?.uri?.split(":").pop(),
+            display_name: owner?.name
+          }
+        };
+      } else if (wrapperType === "AlbumResponseWrapper" && contentType === "Album") {
+        const album = item.content.data;
+        const albumId = album.uri?.split(":").pop();
+        return {
+          type: "album",
+          id: albumId,
+          name: album.name,
+          album_type: album.albumType?.toLowerCase(),
+          images: album.coverArt?.sources || [],
+          uri: album.uri,
+          external_urls: { spotify: `https://open.spotify.com/album/${albumId}` },
+          artists: album.artists?.items?.map((artist) => ({
+            id: artist.uri?.split(":").pop(),
+            name: artist.profile?.name
+          })) || []
+        };
+      } else if (wrapperType === "ArtistResponseWrapper" && contentType === "Artist") {
+        const artist = item.content.data;
+        const artistId = artist.uri?.split(":").pop();
+        return {
+          type: "artist",
+          id: artistId,
+          name: artist.profile?.name,
+          images: artist.visuals?.avatarImage?.sources || [],
+          uri: artist.uri,
+          external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+        };
+      }
+      return null;
+    }).filter(Boolean) || [];
+    return {
+      id,
+      title: section.data?.title?.transformedLabel || "Section",
+      items
+    };
+  }).filter((section) => section.items?.length > 0);
+}
+function convertSearchTracks(items) {
+  return items.filter(
+    (item) => item.item?.__typename === "TrackResponseWrapper" && item.item?.data?.__typename === "Track"
+  ).map((item) => {
+    const track = item.item.data;
+    const id = track.uri?.split(":").pop();
+    const artists = track.artists?.items?.map((artist) => {
+      const artistId = artist.uri?.split(":").pop();
+      return {
+        id: artistId,
+        name: artist.profile?.name,
+        uri: artist.uri,
+        external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+      };
+    }) || [];
+    const albumId = track.albumOfTrack?.uri?.split(":").pop();
+    return {
+      id,
+      name: track.name,
+      uri: track.uri,
+      duration_ms: track.duration?.totalMilliseconds,
+      artists,
+      album: {
+        id: albumId,
+        name: track.albumOfTrack?.name,
+        images: track.albumOfTrack?.coverArt?.sources || [],
+        external_urls: { spotify: `https://open.spotify.com/album/${albumId}` }
+      },
+      external_urls: { spotify: `https://open.spotify.com/track/${id}` }
+    };
+  });
+}
+function convertSearchAlbums(items) {
+  return items.filter(
+    (item) => item.__typename === "AlbumResponseWrapper" && item.data?.__typename === "Album"
+  ).map((item) => {
+    const album = item.data;
+    const id = album.uri?.split(":").pop();
+    const artists = album.artists?.items?.map((artist) => {
+      const artistId = artist.uri?.split(":").pop();
+      return {
+        id: artistId,
+        name: artist.profile?.name,
+        uri: artist.uri,
+        external_urls: { spotify: `https://open.spotify.com/artist/${artistId}` }
+      };
+    }) || [];
+    return {
+      id,
+      name: album.name,
+      album_type: album.type?.toLowerCase(),
+      images: album.coverArt?.sources || [],
+      artists,
+      release_date: album.date?.year?.toString(),
+      external_urls: { spotify: `https://open.spotify.com/album/${id}` }
+    };
+  });
+}
+function convertSearchArtists(items) {
+  return items.filter(
+    (item) => item.__typename === "ArtistResponseWrapper" && item.data?.__typename === "Artist"
+  ).map((item) => {
+    const artist = item.data;
+    const id = artist.uri?.split(":").pop();
+    return {
+      id,
+      name: artist.profile?.name,
+      uri: artist.uri,
+      images: artist.visuals?.avatarImage?.sources || [],
+      external_urls: { spotify: `https://open.spotify.com/artist/${id}` }
+    };
+  });
+}
+function convertSearchPlaylists(items) {
+  return items.filter(
+    (item) => item.__typename === "PlaylistResponseWrapper" && item.data?.__typename === "Playlist"
+  ).map((item) => {
+    const playlist = item.data;
+    const id = playlist.uri?.split(":").pop();
+    const owner = playlist.ownerV2?.data;
+    const ownerId = owner?.uri?.split(":").pop();
+    return {
+      id,
+      name: playlist.name,
+      description: playlist.description,
+      uri: playlist.uri,
+      images: playlist.images?.items?.flatMap((img) => img.sources) || [],
+      external_urls: { spotify: `https://open.spotify.com/playlist/${id}` },
+      owner: {
+        id: ownerId,
+        display_name: owner?.name,
+        uri: owner?.uri
+      }
+    };
+  });
+}
+const SpotifyGqlApi = {
+  user: {
+    me: getMe,
+    savedTracks: getSavedTracks,
+    savedPlaylists: getSavedPlaylists,
+    recentlyPlayed: getRecentlyPlayed
+  },
+  playlist: {
+    get: getPlaylist,
+    getTracks: getPlaylistTracks
+  },
+  album: {
+    get: getAlbum,
+    getTracks: getAlbumTracks
+  },
+  artist: {
+    get: getArtist,
+    getTopTracks: getArtistTopTracks,
+    getRelatedArtists
+  },
+  track: {
+    get: getTrack
+  },
+  search: {
+    all: searchAll,
+    tracks: searchTracks,
+    albums: searchAlbums,
+    artists: searchArtists,
+    playlists: searchPlaylists
+  },
+  library: {
+    checkSavedTracks,
+    saveTracks,
+    removeTracks
+  },
+  browse: {
+    home: getHome$1,
+    getRecommendations
+  },
+  player: {
+    // Add player namespace if needed in future
+  }
+};
+async function getRecentlyPlayed(limit = 50) {
+  const result = await apiRequest(`/me/player/recently-played?limit=${limit}`);
+  if (!result.items) {
+    throw new Error("Failed to get recently played tracks");
+  }
+  return {
+    items: result.items.map((item) => ({
+      track: {
+        id: item.track.id,
+        name: item.track.name,
+        uri: item.track.uri,
+        duration_ms: item.track.duration_ms,
+        artists: item.track.artists.map((artist) => ({
+          id: artist.id,
+          name: artist.name,
+          uri: artist.uri,
+          external_urls: artist.external_urls
+        })),
+        album: {
+          id: item.track.album.id,
+          name: item.track.album.name,
+          images: item.track.album.images,
+          external_urls: item.track.album.external_urls
+        },
+        external_urls: item.track.external_urls
+      },
+      played_at: item.played_at
+    }))
+  };
+}
+function initSpotifyHandlers() {
+  console.log("[SpotifyHandler] Initializing...");
+  electron.ipcMain.handle("spotify:get-me", async () => {
+    try {
+      return await SpotifyGqlApi.user.me();
+    } catch (error) {
+      console.error("[SpotifyHandler] get-me error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-saved-tracks", async (_, limit = 20, offset = 0) => {
+    try {
+      return await SpotifyGqlApi.user.savedTracks(offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-saved-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-my-playlists", async (_, limit = 50, offset = 0) => {
+    try {
+      return await SpotifyGqlApi.user.savedPlaylists(offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-my-playlists error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-recently-played", async (_, limit = 50) => {
+    try {
+      return await SpotifyGqlApi.user.recentlyPlayed(limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-recently-played error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-playlist", async (_, playlistId) => {
+    try {
+      return await SpotifyGqlApi.playlist.get(playlistId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-playlist error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-playlist-tracks", async (_, playlistId, limit = 25, offset = 0) => {
+    try {
+      return await SpotifyGqlApi.playlist.getTracks(playlistId, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-playlist-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-album", async (_, albumId) => {
+    try {
+      return await SpotifyGqlApi.album.get(albumId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-album error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-album-tracks", async (_, albumId, offset = 0, limit = 50) => {
+    try {
+      return await SpotifyGqlApi.album.getTracks(albumId, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-album-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-artist", async (_, artistId) => {
+    try {
+      return await SpotifyGqlApi.artist.get(artistId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-artist error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-artist-top-tracks", async (_, artistId) => {
+    try {
+      return await SpotifyGqlApi.artist.getTopTracks(artistId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-artist-top-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-related-artists", async (_, artistId) => {
+    try {
+      return await SpotifyGqlApi.artist.getRelatedArtists(artistId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-related-artists error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-recommendations", async (_, seeds, limit = 10) => {
+    try {
+      return await SpotifyGqlApi.browse.getRecommendations(seeds, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-recommendations error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:get-track", async (_, trackId) => {
+    try {
+      return await SpotifyGqlApi.track.get(trackId);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-track error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:search", async (_, query, offset = 0, limit = 10) => {
+    try {
+      return await SpotifyGqlApi.search.all(query, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] search error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:search-tracks", async (_, query, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.tracks(query, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] search-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:search-albums", async (_, query, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.albums(query, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] search-albums error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:search-artists", async (_, query, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.artists(query, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] search-artists error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:search-playlists", async (_, query, offset = 0, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.search.playlists(query, offset, limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] search-playlists error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:check-saved-tracks", async (_, trackIds) => {
+    try {
+      return await SpotifyGqlApi.library.checkSavedTracks(trackIds);
+    } catch (error) {
+      console.error("[SpotifyHandler] check-saved-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:save-tracks", async (_, trackIds) => {
+    try {
+      return await SpotifyGqlApi.library.saveTracks(trackIds);
+    } catch (error) {
+      console.error("[SpotifyHandler] save-tracks error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:remove-tracks", async (_, trackIds) => {
+    try {
+      return await SpotifyGqlApi.library.removeTracks(trackIds);
+    } catch (error) {
+      console.error("[SpotifyHandler] remove-tracks error:", error.message);
+    }
+  });
+  electron.ipcMain.handle("spotify:get-home", async (_, limit = 20) => {
+    try {
+      return await SpotifyGqlApi.browse.home("Asia/Kolkata", limit);
+    } catch (error) {
+      console.error("[SpotifyHandler] get-home error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("spotify:is-authenticated", async () => {
+    return spotifyAuth.isAuthenticated();
+  });
+  electron.ipcMain.handle("spotify:get-access-token", async () => {
+    return spotifyAuth.accessToken;
+  });
+  console.log("[SpotifyHandler] Initialized");
+}
+let ytmusicCookies = null;
+let sapisid = null;
+function getStoragePath() {
+  return path__namespace.join(electron.app.getPath("userData"), "ytmusic-session.json");
+}
+function setCookies(cookies) {
+  ytmusicCookies = cookies;
+  const match = cookies.match(/SAPISID=([^;]+)/);
+  sapisid = match ? match[1] : null;
+  console.log("[YTMusicAuth] Cookies set, SAPISID found:", !!sapisid);
+  try {
+    fs__namespace.writeFileSync(getStoragePath(), JSON.stringify({ cookies }), "utf-8");
+    console.log("[YTMusicAuth] Session saved to disk");
+  } catch (err) {
+    console.error("[YTMusicAuth] Failed to save session:", err);
+  }
+}
+function getCookies() {
+  return ytmusicCookies;
+}
+function getAuthHeader() {
+  if (!sapisid) return null;
+  const timestamp = Math.floor(Date.now() / 1e3);
+  const origin = "https://music.youtube.com";
+  const hash = crypto__namespace.createHash("sha1").update(`${timestamp} ${sapisid} ${origin}`).digest("hex");
+  return `SAPISIDHASH ${timestamp}_${hash}`;
+}
+function clearCookies() {
+  ytmusicCookies = null;
+  sapisid = null;
+  console.log("[YTMusicAuth] Session cleared");
+  try {
+    const storagePath = getStoragePath();
+    if (fs__namespace.existsSync(storagePath)) {
+      fs__namespace.unlinkSync(storagePath);
+    }
+  } catch (err) {
+    console.error("[YTMusicAuth] Failed to remove session file:", err);
+  }
+}
+function isAuthenticated() {
+  return ytmusicCookies !== null && ytmusicCookies.length > 0;
+}
+function restoreSession() {
+  try {
+    const storagePath = getStoragePath();
+    if (fs__namespace.existsSync(storagePath)) {
+      const data = JSON.parse(fs__namespace.readFileSync(storagePath, "utf-8"));
+      if (data?.cookies && data.cookies.length > 0) {
+        setCookies(data.cookies);
+        console.log("[YTMusicAuth] Session restored from disk");
+        return true;
+      }
+    }
+  } catch (err) {
+    console.error("[YTMusicAuth] Failed to restore session:", err);
+  }
+  return false;
+}
+const MAX_CACHE_SIZE = 500;
+const MAX_CONCURRENT = 3;
+const DELAY_BETWEEN_MS = 200;
+const cache = /* @__PURE__ */ new Map();
+const cacheOrder = [];
+let activeRequests = 0;
+const queue = [];
+function evictIfNeeded$1() {
+  while (cache.size > MAX_CACHE_SIZE && cacheOrder.length > 0) {
+    const oldest = cacheOrder.shift();
+    cache.delete(oldest);
+  }
+}
+function processQueue() {
+  while (activeRequests < MAX_CONCURRENT && queue.length > 0) {
+    const item = queue.shift();
+    activeRequests++;
+    doFetch(item);
+  }
+}
+function doFetch(item) {
+  const parsedUrl = new URL(item.url);
+  const client = parsedUrl.protocol === "https:" ? https : http;
+  const req = client.get(item.url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9"
+    },
+    timeout: 1e4
+  }, (response) => {
+    const statusCode = response.statusCode || 0;
+    if (statusCode === 429 || statusCode === 503) {
+      response.resume();
+      activeRequests--;
+      if (item.retries > 0) {
+        console.log(`[ThumbCache] ${statusCode} → retry in ${item.backoff}ms (${item.retries} left)`);
+        setTimeout(() => {
+          item.retries--;
+          item.backoff = Math.min(item.backoff * 2, 3e4);
+          queue.unshift(item);
+          processQueue();
+        }, item.backoff);
+      } else {
+        item.reject(new Error(`Rate limited after all retries`));
+        scheduleNext();
+      }
+      return;
+    }
+    if (statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307) {
+      response.resume();
+      activeRequests--;
+      const redirectUrl = response.headers.location;
+      if (redirectUrl && item.retries > 0) {
+        item.url = redirectUrl;
+        item.retries--;
+        queue.unshift(item);
+        processQueue();
+      } else {
+        item.reject(new Error(`Too many redirects`));
+        scheduleNext();
+      }
+      return;
+    }
+    if (statusCode !== 200) {
+      response.resume();
+      activeRequests--;
+      item.reject(new Error(`HTTP ${statusCode}`));
+      scheduleNext();
+      return;
+    }
+    const chunks = [];
+    response.on("data", (chunk) => {
+      chunks.push(Buffer.from(chunk));
+    });
+    response.on("end", () => {
+      const buffer = Buffer.concat(chunks);
+      cache.set(item.url, buffer);
+      cacheOrder.push(item.url);
+      evictIfNeeded$1();
+      activeRequests--;
+      item.resolve(buffer);
+      scheduleNext();
+    });
+    response.on("error", (err) => {
+      activeRequests--;
+      item.reject(err);
+      scheduleNext();
+    });
+  });
+  req.on("timeout", () => {
+    req.destroy();
+    activeRequests--;
+    if (item.retries > 0) {
+      item.retries--;
+      item.backoff = Math.min(item.backoff * 2, 3e4);
+      queue.unshift(item);
+      setTimeout(processQueue, item.backoff);
+    } else {
+      item.reject(new Error("Timeout"));
+      scheduleNext();
+    }
+  });
+  req.on("error", (err) => {
+    activeRequests--;
+    if (item.retries > 0) {
+      setTimeout(() => {
+        item.retries--;
+        item.backoff = Math.min(item.backoff * 2, 3e4);
+        queue.unshift(item);
+        processQueue();
+      }, item.backoff);
+    } else {
+      item.reject(err);
+      scheduleNext();
+    }
+  });
+}
+function scheduleNext() {
+  if (queue.length > 0) {
+    setTimeout(processQueue, DELAY_BETWEEN_MS);
+  }
+}
+function fetchWithQueue(url) {
+  return new Promise((resolve, reject) => {
+    queue.push({ url, resolve, reject, retries: 3, backoff: 2e3 });
+    processQueue();
+  });
+}
+function registerThumbProtocol() {
+  electron.protocol.handle("thumb-cache", async (request) => {
+    try {
+      const originalUrl = decodeURIComponent(request.url.replace("thumb-cache://", ""));
+      if (cache.has(originalUrl)) {
+        return new Response(cache.get(originalUrl), {
+          headers: { "Content-Type": "image/webp", "Cache-Control": "max-age=604800" }
+        });
+      }
+      const buffer = await fetchWithQueue(originalUrl);
+      return new Response(buffer, {
+        headers: { "Content-Type": "image/webp", "Cache-Control": "max-age=604800" }
+      });
+    } catch (err) {
+      console.error("[ThumbCache] Failed:", err.message?.substring(0, 80));
+      return new Response("", { status: 502 });
+    }
+  });
+  console.log("[ThumbCache] Protocol registered (cookie-free Node.js fetching)");
+}
+function toThumbUrl(url) {
+  if (!url) return "";
+  if (url.includes("googleusercontent.com") || url.includes("ggpht.com")) {
+    return `thumb-cache://${encodeURIComponent(url)}`;
+  }
+  return url;
+}
+const INNERTUBE_BASE = "https://music.youtube.com/youtubei/v1";
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const CLIENT_VERSION = "1.20241118.01.00";
+function getContext() {
+  return {
+    client: {
+      clientName: "WEB_REMIX",
+      clientVersion: CLIENT_VERSION,
+      hl: "en",
+      gl: "IN",
+      experimentIds: [],
+      experimentsToken: "",
+      browserName: "Chrome",
+      browserVersion: "120.0.0.0",
+      osName: "Windows",
+      osVersion: "10.0",
+      platform: "DESKTOP",
+      musicAppInfo: {
+        pwaInstallabilityStatus: "PWA_INSTALLABILITY_STATUS_UNKNOWN",
+        webDisplayMode: "WEB_DISPLAY_MODE_BROWSER",
+        musicActivityMasterSwitch: "MUSIC_ACTIVITY_MASTER_SWITCH_INDETERMINATE",
+        musicLocationMasterSwitch: "MUSIC_LOCATION_MASTER_SWITCH_INDETERMINATE"
+      }
+    },
+    user: { lockedSafetyMode: false }
+  };
+}
+async function innertubeRequest(endpoint, body, additionalParams = "") {
+  const cookies = getCookies();
+  if (!cookies) throw new Error("Not authenticated with YouTube Music");
+  const url = `${INNERTUBE_BASE}/${endpoint}?prettyPrint=false${additionalParams}`;
+  const requestBody = JSON.stringify({
+    context: getContext(),
+    ...body
+  });
+  return new Promise((resolve, reject) => {
+    const request = electron.net.request({ url, method: "POST" });
+    request.setHeader("Cookie", cookies);
+    request.setHeader("User-Agent", USER_AGENT);
+    request.setHeader("Content-Type", "application/json");
+    request.setHeader("Origin", "https://music.youtube.com");
+    request.setHeader("Referer", "https://music.youtube.com/");
+    request.setHeader("X-Youtube-Client-Name", "67");
+    request.setHeader("X-Youtube-Client-Version", CLIENT_VERSION);
+    const authHeader = getAuthHeader();
+    if (authHeader) {
+      request.setHeader("Authorization", authHeader);
+    }
+    let data = "";
+    request.on("response", (response) => {
+      response.on("data", (chunk) => {
+        data += chunk.toString();
+      });
+      response.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          console.error("[YTMusicApi] JSON parse error:", e, "Raw:", data.substring(0, 300));
+          reject(new Error("Failed to parse YouTube Music response"));
+        }
+      });
+    });
+    request.on("error", (err) => {
+      console.error("[YTMusicApi] Request error:", err);
+      reject(err);
+    });
+    request.write(requestBody);
+    request.end();
+  });
+}
+function nav(obj, path2, nullIfAbsent = false) {
+  let current = obj;
+  for (const key of path2) {
+    if (current == null || typeof current !== "object") {
+      return nullIfAbsent ? null : void 0;
+    }
+    current = current[key];
+  }
+  return current ?? (nullIfAbsent ? null : void 0);
+}
+function proxyThumbnail(url, size = 226) {
+  if (!url) return "";
+  let resized = url;
+  if (url.includes("googleusercontent.com") || url.includes("ggpht.com")) {
+    resized = url.replace(/=w\d+[^&\s]*|=s\d+[^&\s]*/i, `=w${size}-h${size}-l90-rj`);
+  }
+  return toThumbUrl(resized);
+}
+function getThumbnails(renderer) {
+  return nav(renderer, ["thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails"]) || nav(renderer, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"]) || [];
+}
+function getBestThumbnail(renderer) {
+  const thumbs = getThumbnails(renderer);
+  const url = thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url || "" : "";
+  return proxyThumbnail(url);
+}
+function parseSubtitleRuns(renderer) {
+  const runs = nav(renderer, ["subtitle", "runs"]) || [];
+  const artists = [];
+  let album = null;
+  let year = "";
+  const fullSubtitle = runs.map((r) => r.text).join("");
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
+    const browseId = nav(run, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+    if (browseId) {
+      if (browseId.startsWith("MPRE")) {
+        album = { name: run.text, id: browseId };
+      } else if (browseId.startsWith("UC") || browseId.startsWith("FE")) {
+        artists.push({ name: run.text, id: browseId });
+      }
+    }
+    if (run.text && /^\d{4}$/.test(run.text.trim())) {
+      year = run.text.trim();
+    }
+  }
+  return { artists, album, subtitle: fullSubtitle, year };
+}
+function parseSong(renderer) {
+  const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+  const videoId = nav(renderer, ["navigationEndpoint", "watchEndpoint", "videoId"]) || "";
+  const playlistId = nav(renderer, ["navigationEndpoint", "watchEndpoint", "playlistId"], true) || "";
+  const thumbnails = getThumbnails(renderer);
+  const imageUrl = getBestThumbnail(renderer);
+  const parsed = parseSubtitleRuns(renderer);
+  return {
+    type: "song",
+    title,
+    videoId,
+    playlistId,
+    artists: parsed.artists,
+    album: parsed.album,
+    subtitle: parsed.subtitle,
+    thumbnails,
+    imageUrl
+  };
+}
+function parseWatchPlaylist(renderer) {
+  const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+  const playlistId = nav(renderer, ["navigationEndpoint", "watchPlaylistEndpoint", "playlistId"]) || "";
+  const thumbnails = getThumbnails(renderer);
+  const imageUrl = getBestThumbnail(renderer);
+  const parsed = parseSubtitleRuns(renderer);
+  return {
+    type: "watch_playlist",
+    title,
+    playlistId,
+    subtitle: parsed.subtitle,
+    thumbnails,
+    imageUrl
+  };
+}
+function parsePlaylist(renderer) {
+  const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+  const browseId = nav(renderer, ["title", "runs", "0", "navigationEndpoint", "browseEndpoint", "browseId"]) || "";
+  const playlistId = browseId.startsWith("VL") ? browseId.substring(2) : browseId;
+  const thumbnails = getThumbnails(renderer);
+  const imageUrl = getBestThumbnail(renderer);
+  const parsed = parseSubtitleRuns(renderer);
+  const runs = nav(renderer, ["subtitle", "runs"]) || [];
+  let count = "";
+  let author = [];
+  if (runs.length >= 3) {
+    const countText = runs[runs.length - 1]?.text || "";
+    const match = countText.match(/(\d+)/);
+    if (match) count = match[1];
+    const firstRun = runs[0];
+    if (firstRun?.navigationEndpoint) {
+      author = [{ name: firstRun.text, id: nav(firstRun, ["navigationEndpoint", "browseEndpoint", "browseId"]) || "" }];
+    }
+  }
+  return {
+    type: "playlist",
+    title,
+    playlistId,
+    browseId,
+    subtitle: parsed.subtitle,
+    description: parsed.subtitle,
+    count,
+    author,
+    thumbnails,
+    imageUrl
+  };
+}
+function parseAlbum(renderer) {
+  const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+  const browseId = nav(renderer, ["title", "runs", "0", "navigationEndpoint", "browseEndpoint", "browseId"]) || "";
+  const thumbnails = getThumbnails(renderer);
+  const imageUrl = getBestThumbnail(renderer);
+  const parsed = parseSubtitleRuns(renderer);
+  return {
+    type: "album",
+    title,
+    browseId,
+    playlistId: browseId,
+    artists: parsed.artists,
+    year: parsed.year,
+    subtitle: parsed.subtitle,
+    thumbnails,
+    imageUrl
+  };
+}
+function parseArtist(renderer) {
+  const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+  const browseId = nav(renderer, ["title", "runs", "0", "navigationEndpoint", "browseEndpoint", "browseId"]) || "";
+  const thumbnails = getThumbnails(renderer);
+  const imageUrl = getBestThumbnail(renderer);
+  const subscribers = nav(renderer, ["subtitle", "runs", "0", "text"], true) || "";
+  return {
+    type: "artist",
+    title,
+    browseId,
+    subscribers: subscribers.split(" ")[0],
+    subtitle: subscribers,
+    thumbnails,
+    imageUrl
+  };
+}
+function extractItemFromRenderer(renderer) {
+  const titleRun = nav(renderer, ["title", "runs", "0"]);
+  if (!titleRun) return null;
+  const navEndpoint = renderer?.navigationEndpoint || titleRun?.navigationEndpoint;
+  const pageType = nav(navEndpoint, [
+    "browseEndpoint",
+    "browseEndpointContextSupportedConfigs",
+    "browseEndpointContextMusicConfig",
+    "pageType"
+  ], true) || "";
+  const watchVideoId = nav(navEndpoint, ["watchEndpoint", "videoId"], true);
+  const watchPlaylistId = nav(navEndpoint, ["watchPlaylistEndpoint", "playlistId"], true);
+  if (watchVideoId) {
+    return parseSong(renderer);
+  }
+  if (watchPlaylistId && !pageType) {
+    return parseWatchPlaylist(renderer);
+  }
+  if (pageType === "MUSIC_PAGE_TYPE_PLAYLIST") {
+    return parsePlaylist(renderer);
+  }
+  if (pageType === "MUSIC_PAGE_TYPE_ALBUM" || pageType === "MUSIC_PAGE_TYPE_AUDIOBOOK") {
+    return parseAlbum(renderer);
+  }
+  if (pageType === "MUSIC_PAGE_TYPE_ARTIST" || pageType === "MUSIC_PAGE_TYPE_USER_CHANNEL") {
+    return parseArtist(renderer);
+  }
+  const browseId = nav(navEndpoint, ["browseEndpoint", "browseId"], true) || "";
+  if (browseId.startsWith("VL")) {
+    return parsePlaylist(renderer);
+  }
+  if (browseId.startsWith("UC") || browseId.startsWith("MP")) {
+    return parseArtist(renderer);
+  }
+  if (browseId.startsWith("MPRE")) {
+    return parseAlbum(renderer);
+  }
+  const title = titleRun?.text || "";
+  const imageUrl = getBestThumbnail(renderer);
+  const parsed = parseSubtitleRuns(renderer);
+  return {
+    type: "unknown",
+    title,
+    browseId,
+    playlistId: browseId.startsWith("VL") ? browseId.substring(2) : "",
+    subtitle: parsed.subtitle,
+    thumbnails: getThumbnails(renderer),
+    imageUrl,
+    id: browseId || Math.random().toString(36)
+  };
+}
+function extractShelfRenderers(data) {
+  const sections = [];
+  try {
+    const tabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs || [];
+    for (const tab of tabs) {
+      const sectionList = tab?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+      for (const section of sectionList) {
+        const shelf = section?.musicCarouselShelfRenderer || section?.musicImmersiveCarouselShelfRenderer;
+        if (shelf) {
+          const header = shelf.header?.musicCarouselShelfBasicHeaderRenderer || shelf.header?.musicImmersiveCarouselShelfBasicHeaderRenderer;
+          const title = header?.title?.runs?.[0]?.text || "Untitled";
+          const items = (shelf.contents || []).map((item) => {
+            const twoRow = item?.musicTwoRowItemRenderer;
+            if (twoRow) {
+              return extractItemFromRenderer(twoRow);
+            }
+            const listItem = item?.musicResponsiveListItemRenderer;
+            if (listItem) {
+              return parseFlatSong(listItem);
+            }
+            return null;
+          }).filter(Boolean);
+          if (items.length > 0) {
+            sections.push({
+              id: title.replace(/\s+/g, "_").toLowerCase(),
+              title,
+              contents: items,
+              items
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error extracting shelves:", e);
+  }
+  return sections;
+}
+function parseFlatSong(renderer) {
+  const flexColumns = renderer.flexColumns || [];
+  const title = nav(flexColumns, ["0", "musicResponsiveListItemFlexColumnRenderer", "text", "runs", "0", "text"]) || "";
+  const videoId = nav(flexColumns, [
+    "0",
+    "musicResponsiveListItemFlexColumnRenderer",
+    "text",
+    "runs",
+    "0",
+    "navigationEndpoint",
+    "watchEndpoint",
+    "videoId"
+  ], true) || renderer?.playlistItemData?.videoId || nav(renderer, [
+    "overlay",
+    "musicItemThumbnailOverlayRenderer",
+    "content",
+    "musicPlayButtonRenderer",
+    "playNavigationEndpoint",
+    "watchEndpoint",
+    "videoId"
+  ], true) || "";
+  const artistRuns = nav(flexColumns, ["1", "musicResponsiveListItemFlexColumnRenderer", "text", "runs"]) || [];
+  const artists = artistRuns.filter((r) => r.navigationEndpoint).map((r) => ({
+    name: r.text,
+    id: nav(r, ["navigationEndpoint", "browseEndpoint", "browseId"]) || ""
+  }));
+  const subtitle = artistRuns.map((r) => r.text).join("");
+  const albumRun = nav(flexColumns, ["2", "musicResponsiveListItemFlexColumnRenderer", "text", "runs", "0"]);
+  const album = albumRun ? {
+    name: albumRun.text || "",
+    id: nav(albumRun, ["navigationEndpoint", "browseEndpoint", "browseId"]) || ""
+  } : null;
+  const thumbnails = nav(renderer, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"]) || [];
+  const imageUrl = proxyThumbnail(thumbnails.length > 0 ? thumbnails[thumbnails.length - 1]?.url : "");
+  const durationText = nav(renderer, ["fixedColumns", "0", "musicResponsiveListItemFixedColumnRenderer", "text", "runs", "0", "text"]) || "";
+  const durationParts = durationText.split(":").map(Number);
+  let durationMs = 0;
+  let durationSeconds = 0;
+  if (durationParts.length === 2) {
+    durationSeconds = durationParts[0] * 60 + durationParts[1];
+    durationMs = durationSeconds * 1e3;
+  } else if (durationParts.length === 3) {
+    durationSeconds = durationParts[0] * 3600 + durationParts[1] * 60 + durationParts[2];
+    durationMs = durationSeconds * 1e3;
+  }
+  return {
+    type: "song",
+    title,
+    videoId,
+    artists,
+    album,
+    subtitle,
+    thumbnails,
+    imageUrl,
+    duration: durationText,
+    durationMs,
+    durationSeconds,
+    id: videoId || Math.random().toString(36)
+  };
+}
+function extractPlaylistTracks(data) {
+  const tracks = [];
+  try {
+    const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
+    const secondarySection = twoCol?.secondaryContents?.sectionListRenderer;
+    const primaryShelf = secondarySection?.contents?.[0]?.musicPlaylistShelfRenderer || secondarySection?.contents?.[0]?.musicShelfRenderer;
+    if (primaryShelf?.contents) {
+      for (const item of primaryShelf.contents) {
+        const renderer = item?.musicResponsiveListItemRenderer;
+        if (!renderer) continue;
+        const track = parsePlaylistItem(renderer);
+        if (track && track.videoId && track.title) {
+          tracks.push(track);
+        }
+      }
+    }
+    if (tracks.length === 0) {
+      const tabs = twoCol?.tabs || data?.contents?.singleColumnBrowseResultsRenderer?.tabs || [];
+      for (const tab of tabs) {
+        const sectionList = tab?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+        for (const section of sectionList) {
+          const shelf = section?.musicShelfRenderer || section?.musicPlaylistShelfRenderer;
+          if (!shelf) continue;
+          for (const item of shelf.contents || []) {
+            const renderer = item?.musicResponsiveListItemRenderer;
+            if (!renderer) continue;
+            const track = parsePlaylistItem(renderer);
+            if (track && track.videoId && track.title) {
+              tracks.push(track);
+            }
+          }
+        }
+      }
+    }
+    if (tracks.length === 0 && twoCol) {
+      const tabContents = twoCol.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+      for (const sec of tabContents) {
+        const shelf = sec?.musicShelfRenderer;
+        if (shelf?.contents) {
+          for (const item of shelf.contents) {
+            const renderer = item?.musicResponsiveListItemRenderer;
+            if (!renderer) continue;
+            const track = parsePlaylistItem(renderer);
+            if (track && track.videoId && track.title) {
+              tracks.push(track);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error extracting playlist tracks:", e);
+  }
+  return tracks;
+}
+function parsePlaylistItem(renderer) {
+  const flexColumns = renderer.flexColumns || [];
+  let videoId = renderer?.playlistItemData?.videoId || "";
+  if (!videoId) {
+    videoId = nav(renderer, [
+      "overlay",
+      "musicItemThumbnailOverlayRenderer",
+      "content",
+      "musicPlayButtonRenderer",
+      "playNavigationEndpoint",
+      "watchEndpoint",
+      "videoId"
+    ], true) || "";
+  }
+  if (!videoId) {
+    videoId = nav(flexColumns, [
+      "0",
+      "musicResponsiveListItemFlexColumnRenderer",
+      "text",
+      "runs",
+      "0",
+      "navigationEndpoint",
+      "watchEndpoint",
+      "videoId"
+    ], true) || "";
+  }
+  if (!videoId) {
+    const menuItems = nav(renderer, ["menu", "menuRenderer", "items"]) || [];
+    for (const mi of menuItems) {
+      const svc = mi?.menuServiceItemRenderer?.serviceEndpoint;
+      if (svc?.playlistEditEndpoint) {
+        videoId = svc.playlistEditEndpoint.actions?.[0]?.removedVideoId || "";
+        if (videoId) break;
+      }
+    }
+  }
+  const title = nav(flexColumns, ["0", "musicResponsiveListItemFlexColumnRenderer", "text", "runs", "0", "text"]) || "";
+  const artists = [];
+  let album = null;
+  let subtitleParts = [];
+  for (let colIdx = 1; colIdx < flexColumns.length; colIdx++) {
+    const runs = nav(flexColumns, [String(colIdx), "musicResponsiveListItemFlexColumnRenderer", "text", "runs"]) || [];
+    for (const run of runs) {
+      const browseEndpoint = nav(run, ["navigationEndpoint", "browseEndpoint"], true);
+      if (browseEndpoint) {
+        const pageType = nav(browseEndpoint, [
+          "browseEndpointContextSupportedConfigs",
+          "browseEndpointContextMusicConfig",
+          "pageType"
+        ], true) || "";
+        if (pageType === "MUSIC_PAGE_TYPE_ARTIST" || pageType === "MUSIC_PAGE_TYPE_USER_CHANNEL" || pageType === "MUSIC_PAGE_TYPE_UNKNOWN") {
+          artists.push({ name: run.text, id: browseEndpoint.browseId || "" });
+        } else if (pageType === "MUSIC_PAGE_TYPE_ALBUM" || pageType === "MUSIC_PAGE_TYPE_AUDIOBOOK") {
+          album = { name: run.text, id: browseEndpoint.browseId || "" };
+        }
+      }
+      if (run.text) subtitleParts.push(run.text);
+    }
+  }
+  const subtitle = subtitleParts.join("");
+  if (artists.length === 0 && subtitle) {
+    artists.push({ name: subtitle.split(" • ")[0]?.split(" & ")[0] || subtitle, id: "" });
+  }
+  const durationText = nav(renderer, ["fixedColumns", "0", "musicResponsiveListItemFixedColumnRenderer", "text", "runs", "0", "text"]) || "";
+  const durationParts = durationText.split(":").map(Number);
+  let durationSeconds = 0;
+  if (durationParts.length === 2) durationSeconds = durationParts[0] * 60 + durationParts[1];
+  else if (durationParts.length === 3) durationSeconds = durationParts[0] * 3600 + durationParts[1] * 60 + durationParts[2];
+  const thumbnails = nav(renderer, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"]) || [];
+  const imageUrl = proxyThumbnail(thumbnails.length > 0 ? thumbnails[thumbnails.length - 1]?.url : "");
+  return {
+    type: "song",
+    title,
+    videoId,
+    artists,
+    album,
+    subtitle,
+    thumbnails,
+    imageUrl,
+    duration: durationText,
+    durationMs: durationSeconds * 1e3,
+    durationSeconds,
+    id: videoId || Math.random().toString(36)
+  };
+}
+function getSearchParams(filter, scope, ignoreSpelling = false) {
+  const filteredParam1 = "EgWKAQ";
+  let params = null;
+  if (!filter && !scope && !ignoreSpelling) {
+    return null;
+  }
+  if (scope === "uploads") {
+    params = "agIYAw%3D%3D";
+  }
+  if (scope === "library") {
+    if (filter) {
+      const param2 = _getParam2(filter);
+      return filteredParam1 + param2 + "AWoKEAUQCRADEAoYBA%3D%3D";
+    } else {
+      params = "agIYBA%3D%3D";
+    }
+  }
+  if (!scope && filter) {
+    if (filter === "playlists") {
+      params = "Eg-KAQwIABAAGAAgACgB";
+      if (!ignoreSpelling) {
+        params += "MABqChAEEAMQCRAFEAo%3D";
+      } else {
+        params += "MABCAggBagoQBBADEAkQBRAK";
+      }
+    } else if (filter.includes("playlists")) {
+      const param1 = "EgeKAQQoA";
+      const param2 = filter === "featured_playlists" ? "Dg" : "EA";
+      const param3 = !ignoreSpelling ? "BagwQDhAKEAMQBBAJEAU%3D" : "BQgIIAWoMEA4QChADEAQQCRAF";
+      return param1 + param2 + param3;
+    } else {
+      const param2 = _getParam2(filter);
+      const param3 = !ignoreSpelling ? "AWoMEA4QChADEAQQCRAF" : "AUICCAFqDBAOEAoQAxAEEAkQBQ%3D%3D";
+      return filteredParam1 + param2 + param3;
+    }
+  }
+  if (!scope && !filter && ignoreSpelling) {
+    params = "EhGKAQ4IARABGAEgASgAOAFAAUICCAE%3D";
+  }
+  return params;
+}
+function _getParam2(filter) {
+  const filterParams = {
+    "songs": "II",
+    "videos": "IQ",
+    "albums": "IY",
+    "artists": "Ig",
+    "playlists": "Io",
+    "profiles": "JY",
+    "podcasts": "JQ",
+    "episodes": "JI"
+  };
+  return filterParams[filter] || "";
+}
+function getFlexColumnItem(data, index) {
+  if (data?.flexColumns?.length > index) {
+    return nav(data.flexColumns[index], ["musicResponsiveListItemFlexColumnRenderer"], true);
+  }
+  return null;
+}
+function getItemText(data, index, runIndex = 0) {
+  const item = getFlexColumnItem(data, index);
+  if (!item) return null;
+  return nav(item, ["text", "runs", runIndex, "text"], true);
+}
+function parseSearchResult(data, resultType, category) {
+  const searchResult = { category };
+  if (!resultType) {
+    const browseId = nav(data, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+    if (browseId) {
+      if (browseId.startsWith("VM") || browseId.startsWith("RD") || browseId.startsWith("VL")) resultType = "playlist";
+      else if (browseId.startsWith("MPLA")) resultType = "artist";
+      else if (browseId.startsWith("MPRE")) resultType = "album";
+      else if (browseId.startsWith("MPSP")) resultType = "podcast";
+      else if (browseId.startsWith("MPED")) resultType = "episode";
+      else if (browseId.startsWith("UC")) resultType = "artist";
+    } else {
+      const videoType = nav(data, ["playNavigationEndpoint", "watchEndpoint", "watchEndpointMusicSupportedConfigs", "watchEndpointMusicConfig", "musicVideoType"], true);
+      if (videoType === "MUSIC_VIDEO_TYPE_ATV") resultType = "song";
+      else if (videoType === "MUSIC_VIDEO_TYPE_PODCAST_EPISODE") resultType = "episode";
+      else resultType = "video";
+    }
+  }
+  if (!resultType && category) {
+    const lowerCat = category.toLowerCase();
+    if (lowerCat.includes("song")) resultType = "song";
+    else if (lowerCat.includes("video")) resultType = "video";
+    else if (lowerCat.includes("album")) resultType = "album";
+    else if (lowerCat.includes("artist")) resultType = "artist";
+    else if (lowerCat.includes("playlist")) resultType = "playlist";
+  }
+  if (!resultType) resultType = "song";
+  searchResult.resultType = resultType;
+  if (resultType !== "artist") {
+    searchResult.title = nav(data, ["title", "runs", 0, "text"], true);
+    if (!searchResult.title) {
+      searchResult.title = getItemText(data, 0);
+    }
+  }
+  if (resultType === "artist") {
+    searchResult.artist = nav(data, ["title", "runs", 0, "text"], true) || getItemText(data, 0);
+    searchResult.browseId = nav(data, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+    searchResult.thumbnails = nav(data, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"], true);
+    const subtitle = nav(data, ["subtitle", "runs", 0, "text"], true);
+    if (subtitle && subtitle.includes("subscribers")) {
+      searchResult.subscribers = subtitle.split(" ")[0];
+    }
+  } else if (resultType === "album") {
+    searchResult.type = nav(data, ["subtitle", "runs", 0, "text"], true);
+    searchResult.browseId = nav(data, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+    searchResult.thumbnails = nav(data, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"], true);
+    let runs = nav(data, ["subtitle", "runs"]);
+    if (!runs) {
+      const flexItem = getFlexColumnItem(data, 1);
+      runs = nav(flexItem, ["text", "runs"], true) || [];
+    }
+    if (runs.length > 2) {
+      searchResult.year = runs[runs.length - 1].text;
+      searchResult.artist = runs[2].text;
+    }
+    if (!searchResult.type && runs.length > 0) searchResult.type = runs[0].text;
+  } else if (resultType === "playlist") {
+    searchResult.title = nav(data, ["title", "runs", 0, "text"], true) || getItemText(data, 0);
+    searchResult.thumbnails = nav(data, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"], true);
+    let runs = nav(data, ["subtitle", "runs"]);
+    if (!runs) {
+      const flexItem = getFlexColumnItem(data, 1);
+      runs = nav(flexItem, ["text", "runs"], true) || [];
+    }
+    if (runs.length > 0) {
+      searchResult.author = runs[0].text;
+      searchResult.itemCount = runs[runs.length - 1]?.text.split(" ")[0];
+    }
+    const browseId = nav(data, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+    searchResult.playlistId = browseId;
+    searchResult.browseId = browseId;
+  } else if (resultType === "song") {
+    searchResult.type = "song";
+    searchResult.videoId = nav(data, ["playNavigationEndpoint", "watchEndpoint", "videoId"], true);
+    if (!searchResult.videoId) {
+      searchResult.videoId = nav(data, ["onTap", "watchEndpoint", "videoId"], true);
+    }
+    searchResult.title = nav(data, ["title", "runs", 0, "text"], true) || getItemText(data, 0);
+    searchResult.thumbnails = nav(data, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"], true);
+    let runs = nav(data, ["subtitle", "runs"]);
+    if (!runs) {
+      const flexItem = getFlexColumnItem(data, 1);
+      runs = nav(flexItem, ["text", "runs"], true) || [];
+    }
+    const artists = [];
+    let album = null;
+    let duration = null;
+    for (const run of runs) {
+      if (run.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")) {
+        artists.push({ name: run.text, id: run.navigationEndpoint.browseEndpoint.browseId });
+      } else if (run.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("MPRE") || run.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("OLAK")) {
+        album = { name: run.text, id: run.navigationEndpoint.browseEndpoint.browseId };
+      } else if (/^\d+:\d+$/.test(run.text)) {
+        duration = run.text;
+      }
+    }
+    if (artists.length === 0 && runs.length > 0) {
+      const validRuns = runs.filter((r) => r.text !== " • ");
+      if (validRuns.length > 0) {
+        artists.push({ name: validRuns[0].text, id: "" });
+      }
+      if (validRuns.length > 1 && !album) ;
+    }
+    searchResult.artists = artists;
+    searchResult.album = album;
+    searchResult.duration = duration;
+    searchResult.imageUrl = proxyThumbnail(searchResult.thumbnails?.[searchResult.thumbnails.length - 1]?.url);
+  } else if (resultType === "video") {
+    searchResult.type = "video";
+    searchResult.videoId = nav(data, ["playNavigationEndpoint", "watchEndpoint", "videoId"], true);
+    searchResult.title = nav(data, ["title", "runs", 0, "text"], true) || getItemText(data, 0);
+    searchResult.thumbnails = nav(data, ["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"], true);
+    let runs = nav(data, ["subtitle", "runs"]);
+    if (!runs) {
+      const flexItem = getFlexColumnItem(data, 1);
+      runs = nav(flexItem, ["text", "runs"], true) || [];
+    }
+    const artists = [];
+    let views = "";
+    let duration = "";
+    for (const run of runs) {
+      if (run.navigationEndpoint?.browseEndpoint?.browseId?.startsWith("UC")) {
+        artists.push({ name: run.text, id: run.navigationEndpoint.browseEndpoint.browseId });
+      } else if (run.text.includes("views")) {
+        views = run.text.split(" ")[0];
+      } else if (/^\d+:\d+$/.test(run.text)) {
+        duration = run.text;
+      }
+    }
+    if (artists.length === 0 && runs.length > 0) {
+      const validRuns = runs.filter((r) => r.text !== " • ");
+      if (validRuns.length > 0) artists.push({ name: validRuns[0].text, id: "" });
+    }
+    searchResult.artists = artists;
+    searchResult.views = views;
+    searchResult.duration = duration;
+    searchResult.imageUrl = proxyThumbnail(searchResult.thumbnails?.[searchResult.thumbnails.length - 1]?.url);
+  }
+  if (searchResult.thumbnails && searchResult.thumbnails.length > 0) {
+    searchResult.imageUrl = proxyThumbnail(searchResult.thumbnails[searchResult.thumbnails.length - 1].url);
+  }
+  return searchResult;
+}
+async function getHome(limit = 10) {
+  console.log("[YTMusicApi] Fetching home (limit:", limit, ")...");
+  const body = { browseId: "FEmusic_home" };
+  const data = await innertubeRequest("browse", body);
+  const sections = extractShelfRenderers(data);
+  console.log(`[YTMusicApi] Initial home sections: ${sections.length}`);
+  try {
+    const sectionList = data?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer;
+    if (sectionList?.continuations) {
+      let ctoken = sectionList.continuations?.[0]?.nextContinuationData?.continuation;
+      let iterations = 0;
+      const maxIterations = Math.max(0, limit - sections.length);
+      while (ctoken && iterations < maxIterations) {
+        const additionalParams = `&ctoken=${ctoken}&continuation=${ctoken}`;
+        const contResponse = await innertubeRequest("browse", body, additionalParams);
+        const contSections = contResponse?.continuationContents?.sectionListContinuation;
+        if (!contSections?.contents) break;
+        for (const section of contSections.contents) {
+          const shelf = section?.musicCarouselShelfRenderer || section?.musicImmersiveCarouselShelfRenderer;
+          if (!shelf) continue;
+          const header = shelf.header?.musicCarouselShelfBasicHeaderRenderer || shelf.header?.musicImmersiveCarouselShelfBasicHeaderRenderer;
+          const title = header?.title?.runs?.[0]?.text || "Untitled";
+          const items = (shelf.contents || []).map((item) => {
+            const twoRow = item?.musicTwoRowItemRenderer;
+            if (twoRow) return extractItemFromRenderer(twoRow);
+            const listItem = item?.musicResponsiveListItemRenderer;
+            if (listItem) return parseFlatSong(listItem);
+            return null;
+          }).filter(Boolean);
+          if (items.length > 0) {
+            sections.push({
+              id: title.replace(/\s+/g, "_").toLowerCase(),
+              title,
+              contents: items,
+              items
+            });
+          }
+        }
+        ctoken = contSections.continuations?.[0]?.nextContinuationData?.continuation || null;
+        iterations++;
+        console.log(`[YTMusicApi] Loaded continuation ${iterations}, total sections: ${sections.length}`);
+      }
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error loading home continuations:", e);
+  }
+  console.log(`[YTMusicApi] Total home sections loaded: ${sections.length}`);
+  return sections;
+}
+async function search(query, filter, scope, ignoreSpelling = false) {
+  console.log(`[YTMusicApi] Searching: '${query}' (filter: ${filter}, scope: ${scope})`);
+  const body = { query };
+  const params = getSearchParams(filter, scope, ignoreSpelling);
+  if (params) {
+    body.params = params;
+  }
+  const data = await innertubeRequest("search", body);
+  const searchResults = [];
+  if (!data?.contents) return searchResults;
+  let results;
+  if (data.contents.tabbedSearchResultsRenderer) {
+    const tabs = data.contents.tabbedSearchResultsRenderer.tabs;
+    const tabIndex = scope === "uploads" ? 1 : 0;
+    results = tabs[tabIndex]?.tabRenderer?.content;
+  } else {
+    results = data.contents;
+  }
+  const sectionList = nav(results, ["sectionListRenderer", "contents"], true);
+  if (!sectionList) return searchResults;
+  let resultType;
+  if (filter && filter.includes("playlists")) {
+    resultType = "playlist";
+  } else if (scope === "uploads") {
+    resultType = "upload";
+  } else if (filter) {
+    resultType = filter.slice(0, -1);
+  }
+  for (const res of sectionList) {
+    let category;
+    if (res.musicCardShelfRenderer) {
+      const shelf = res.musicCardShelfRenderer;
+      const topResult = parseSearchResult(shelf, void 0, "Top result");
+      searchResults.push(topResult);
+      const contents = shelf.contents;
+      if (contents) {
+        for (const item of contents) {
+          if (item.musicResponsiveListItemRenderer) {
+            searchResults.push(parseSearchResult(item.musicResponsiveListItemRenderer, "song", "More from YouTube"));
+          }
+        }
+      }
+    } else if (res.musicShelfRenderer) {
+      const shelf = res.musicShelfRenderer;
+      category = nav(shelf, ["title", "runs", 0, "text"], true);
+      let shelfResultType = resultType;
+      if (!shelfResultType && category) {
+        const lowerCat = category.toLowerCase();
+        if (lowerCat === "songs") shelfResultType = "song";
+        else if (lowerCat === "videos") shelfResultType = "video";
+        else if (lowerCat === "albums") shelfResultType = "album";
+        else if (lowerCat === "artists") shelfResultType = "artist";
+        else if (lowerCat === "playlists") shelfResultType = "playlist";
+        else if (lowerCat === "community playlists") shelfResultType = "playlist";
+      }
+      const items = shelf.contents || [];
+      for (const item of items) {
+        if (item.musicResponsiveListItemRenderer) {
+          searchResults.push(parseSearchResult(item.musicResponsiveListItemRenderer, shelfResultType, category));
+        }
+      }
+    }
+  }
+  console.log(`[YTMusicApi] Found ${searchResults.length} search results`);
+  return searchResults;
+}
+async function getSearchSuggestions(query, detailedRuns = false) {
+  const body = { input: query };
+  const data = await innertubeRequest("music/get_search_suggestions", body);
+  const rawSuggestions = nav(data, ["contents", 0, "searchSuggestionsSectionRenderer", "contents"], true) || [];
+  const suggestions = [];
+  for (const raw of rawSuggestions) {
+    if (raw.historySuggestionRenderer) {
+      const renderer = raw.historySuggestionRenderer;
+      const text = nav(renderer, ["navigationEndpoint", "searchEndpoint", "query"], true);
+      const runs = nav(renderer, ["suggestion", "runs"], true);
+      if (detailedRuns) {
+        suggestions.push({
+          text,
+          runs,
+          fromHistory: true
+        });
+      } else {
+        suggestions.push(text);
+      }
+    } else if (raw.searchSuggestionRenderer) {
+      const renderer = raw.searchSuggestionRenderer;
+      const text = nav(renderer, ["navigationEndpoint", "searchEndpoint", "query"], true);
+      const runs = nav(renderer, ["suggestion", "runs"], true);
+      if (detailedRuns) {
+        suggestions.push({
+          text,
+          runs,
+          fromHistory: false
+        });
+      } else {
+        suggestions.push(text);
+      }
+    }
+  }
+  return suggestions;
+}
+async function getUserPlaylists() {
+  console.log("[YTMusicApi] Fetching user playlists...");
+  const data = await innertubeRequest("browse", { browseId: "FEmusic_liked_playlists" });
+  const sections = extractShelfRenderers(data);
+  const allItems = [];
+  for (const section of sections) {
+    allItems.push(...(section.items || section.contents || []).filter(
+      (item) => item.type === "playlist" || item.type === "album" || item.type === "watch_playlist"
+    ));
+  }
+  if (allItems.length === 0) {
+    try {
+      const tabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs || [];
+      for (const tab of tabs) {
+        const grid = tab?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.gridRenderer;
+        if (!grid) continue;
+        for (const item of grid.items || []) {
+          const renderer = item?.musicTwoRowItemRenderer;
+          if (!renderer) continue;
+          allItems.push(extractItemFromRenderer(renderer));
+        }
+      }
+    } catch (e) {
+      console.error("[YTMusicApi] Error extracting library playlists:", e);
+    }
+  }
+  return allItems;
+}
+function extractChannelSongs(data) {
+  const tracks = [];
+  try {
+    const tabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs || [];
+    for (const tab of tabs) {
+      const sectionList = tab?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+      for (const section of sectionList) {
+        const musicShelf = section?.musicShelfRenderer;
+        if (musicShelf?.contents) {
+          for (const item of musicShelf.contents) {
+            const renderer = item?.musicResponsiveListItemRenderer;
+            if (renderer) {
+              const track = parsePlaylistItem(renderer);
+              if (track && track.videoId && track.title) {
+                tracks.push(track);
+              }
+            }
+          }
+        }
+        const carousel = section?.musicCarouselShelfRenderer;
+        if (carousel?.contents) {
+          for (const item of carousel.contents) {
+            const twoRow = item?.musicTwoRowItemRenderer;
+            if (twoRow) {
+              const parsed = extractItemFromRenderer(twoRow);
+              if (parsed && parsed.type === "song" && parsed.videoId) {
+                tracks.push(parsed);
+              }
+            }
+            const listItem = item?.musicResponsiveListItemRenderer;
+            if (listItem) {
+              const track = parseFlatSong(listItem);
+              if (track && track.videoId && track.title) {
+                tracks.push(track);
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error extracting channel songs:", e);
+  }
+  return tracks;
+}
+async function getPlaylistDetails(playlistId) {
+  console.log("[YTMusicApi] Fetching playlist:", playlistId);
+  const directBrowsePrefixes = ["MPRE", "UC", "MPSP", "FE", "VL"];
+  const isDirectBrowse = directBrowsePrefixes.some((p) => playlistId.startsWith(p));
+  const isChannel = playlistId.startsWith("UC");
+  const browseId = isDirectBrowse ? playlistId : `VL${playlistId}`;
+  const idType = isChannel ? "channel" : playlistId.startsWith("MPRE") ? "album" : "playlist";
+  console.log("[YTMusicApi] Using browseId:", browseId, `(${idType})`);
+  const data = await innertubeRequest("browse", { browseId });
+  const topKeys = Object.keys(data || {});
+  console.log("[YTMusicApi] Response top-level keys:", topKeys.join(", "));
+  if (data?.contents) {
+    console.log("[YTMusicApi] contents keys:", Object.keys(data.contents).join(", "));
+  }
+  const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
+  const headerData = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0];
+  if (twoCol) {
+    console.log("[YTMusicApi] twoCol found, secondaryContents:", !!twoCol?.secondaryContents);
+    const secContents = twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0];
+    if (secContents) {
+      console.log("[YTMusicApi] secondaryContents[0] keys:", Object.keys(secContents).join(", "));
+    }
+  }
+  let header = null;
+  if (headerData?.musicEditablePlaylistDetailHeaderRenderer) {
+    const editable = headerData.musicEditablePlaylistDetailHeaderRenderer;
+    header = editable.header?.musicResponsiveHeaderRenderer || editable.header?.musicDetailHeaderRenderer || editable;
+  } else if (headerData?.musicResponsiveHeaderRenderer) {
+    header = headerData.musicResponsiveHeaderRenderer;
+  }
+  if (!header) {
+    header = data?.header?.musicImmersiveHeaderRenderer || data?.header?.musicDetailHeaderRenderer || data?.header?.musicVisualHeaderRenderer || data?.header?.musicResponsiveHeaderRenderer || {};
+  }
+  const title = header?.title?.runs?.[0]?.text || "YouTube Music Playlist";
+  const subtitleRuns = header?.subtitle?.runs || header?.straplineTextOne?.runs || [];
+  const subtitle = subtitleRuns.map((r) => r.text).join("");
+  const thumbnails = header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || header?.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || header?.thumbnail?.croppedSquareThumbnailRenderer?.thumbnail?.thumbnails || [];
+  const imageUrl = proxyThumbnail(thumbnails.length > 0 ? thumbnails[thumbnails.length - 1]?.url : "");
+  let tracks;
+  if (isChannel) {
+    tracks = extractChannelSongs(data);
+    console.log(`[YTMusicApi] Channel '${title}': ${tracks.length} songs extracted from shelves`);
+  } else {
+    tracks = extractPlaylistTracks(data);
+    console.log(`[YTMusicApi] Playlist '${title}': ${tracks.length} tracks extracted`);
+  }
+  return {
+    id: playlistId,
+    title,
+    subtitle,
+    imageUrl,
+    thumbnails,
+    trackCount: tracks.length,
+    tracks
+  };
+}
+async function getSongDetails(videoId) {
+  console.log("[YTMusicApi] Fetching song details:", videoId);
+  const data = await innertubeRequest("player", { videoId });
+  const details = data?.videoDetails || {};
+  const thumbs = details.thumbnail?.thumbnails || [];
+  return {
+    id: details.videoId || videoId,
+    title: details.title || "",
+    artists: details.author || "",
+    durationMs: (parseInt(details.lengthSeconds) || 0) * 1e3,
+    durationSeconds: parseInt(details.lengthSeconds) || 0,
+    imageUrl: proxyThumbnail(thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url : ""),
+    thumbnails: thumbs,
+    videoId: details.videoId || videoId
+  };
+}
+async function getWatchPlaylist(videoId, playlistId, limit = 25, radio = false) {
+  console.log("[YTMusicApi] Fetching watch playlist for:", videoId, radio ? "(radio)" : "");
+  const body = {
+    enablePersistentPlaylistPanel: true,
+    isAudioOnly: true,
+    tunerSettingValue: "AUTOMIX_SETTING_NORMAL"
+  };
+  if (videoId) {
+    body.videoId = videoId;
+    if (radio) {
+      body.playlistId = `RDAMVM${videoId}`;
+    } else if (playlistId) {
+      body.playlistId = playlistId;
+    }
+  }
+  const data = await innertubeRequest("next", body);
+  const result = {
+    tracks: [],
+    playlistId: null,
+    lyrics: null,
+    related: null
+  };
+  try {
+    const watchNext = data?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs || [];
+    const upNextTab = watchNext[0]?.tabRenderer?.content?.musicQueueRenderer;
+    const playlistPanel = upNextTab?.content?.playlistPanelRenderer;
+    if (playlistPanel) {
+      result.playlistId = playlistPanel.playlistId || null;
+      for (const item of playlistPanel.contents || []) {
+        const renderer = item?.playlistPanelVideoRenderer;
+        if (!renderer) continue;
+        const title = nav(renderer, ["title", "runs", "0", "text"]) || "";
+        const vid = renderer.videoId || nav(renderer, ["navigationEndpoint", "watchEndpoint", "videoId"]) || "";
+        const lengthText = nav(renderer, ["lengthText", "runs", "0", "text"]) || "";
+        const bylineRuns = nav(renderer, ["longBylineText", "runs"]) || [];
+        const artists = [];
+        let album = null;
+        for (const run of bylineRuns) {
+          const browseId = nav(run, ["navigationEndpoint", "browseEndpoint", "browseId"], true);
+          if (browseId) {
+            if (browseId.startsWith("MPRE")) {
+              album = { name: run.text, id: browseId };
+            } else if (browseId.startsWith("UC")) {
+              artists.push({ name: run.text, id: browseId });
+            }
+          }
+        }
+        if (artists.length === 0 && bylineRuns.length > 0) {
+          artists.push({ name: bylineRuns[0]?.text || "Unknown", id: "" });
+        }
+        const durationParts = lengthText.split(":").map(Number);
+        let durationSeconds = 0;
+        if (durationParts.length === 2) durationSeconds = durationParts[0] * 60 + durationParts[1];
+        else if (durationParts.length === 3) durationSeconds = durationParts[0] * 3600 + durationParts[1] * 60 + durationParts[2];
+        const thumbnails = nav(renderer, ["thumbnail", "thumbnails"]) || [];
+        const imageUrl = proxyThumbnail(thumbnails.length > 0 ? thumbnails[thumbnails.length - 1]?.url : "");
+        result.tracks.push({
+          type: "song",
+          title,
+          videoId: vid,
+          artists,
+          album,
+          duration: lengthText,
+          durationMs: durationSeconds * 1e3,
+          durationSeconds,
+          thumbnails,
+          imageUrl,
+          id: vid
+        });
+      }
+    }
+    if (watchNext[1]) {
+      const lyricsEndpoint = nav(watchNext, ["1", "tabRenderer", "endpoint", "browseEndpoint", "browseId"], true);
+      result.lyrics = lyricsEndpoint || null;
+    }
+    if (watchNext[2]) {
+      const relatedEndpoint = nav(watchNext, ["2", "tabRenderer", "endpoint", "browseEndpoint", "browseId"], true);
+      result.related = relatedEndpoint || null;
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error parsing watch playlist:", e);
+  }
+  console.log(`[YTMusicApi] Watch playlist: ${result.tracks.length} tracks, related: ${result.related}`);
+  return result;
+}
+async function getSongRelated(browseId) {
+  console.log("[YTMusicApi] Fetching song related:", browseId);
+  const data = await innertubeRequest("browse", { browseId });
+  const sections = [];
+  try {
+    const contents = data?.contents?.sectionListRenderer?.contents || [];
+    for (const section of contents) {
+      const shelf = section?.musicCarouselShelfRenderer || section?.musicDescriptionShelfRenderer;
+      if (section?.musicDescriptionShelfRenderer) {
+        const desc = section.musicDescriptionShelfRenderer;
+        const title2 = nav(desc, ["header", "musicCarouselShelfBasicHeaderRenderer", "title", "runs", "0", "text"]) || nav(desc, ["header", "runs", "0", "text"]) || "About";
+        sections.push({
+          title: title2,
+          contents: nav(desc, ["description", "runs", "0", "text"]) || ""
+        });
+        continue;
+      }
+      if (!shelf) continue;
+      const header = shelf.header?.musicCarouselShelfBasicHeaderRenderer;
+      const title = header?.title?.runs?.[0]?.text || "Related";
+      const items = [];
+      for (const item of shelf.contents || []) {
+        const twoRow = item?.musicTwoRowItemRenderer;
+        if (twoRow) {
+          const parsed = extractItemFromRenderer(twoRow);
+          if (parsed) items.push(parsed);
+          continue;
+        }
+        const listItem = item?.musicResponsiveListItemRenderer;
+        if (listItem) {
+          const parsed = parseFlatSong(listItem);
+          if (parsed) items.push(parsed);
+        }
+      }
+      if (items.length > 0) {
+        sections.push({ title, contents: items });
+      }
+    }
+  } catch (e) {
+    console.error("[YTMusicApi] Error parsing song related:", e);
+  }
+  console.log(`[YTMusicApi] Song related: ${sections.length} sections`);
+  return sections;
+}
+function initYTMusicHandlers() {
+  console.log("[YTMusicHandler] Initializing...");
+  electron.ipcMain.handle("ytmusic:is-authenticated", () => {
+    return isAuthenticated();
+  });
+  electron.ipcMain.handle("ytmusic:logout", async () => {
+    clearCookies();
+    try {
+      const loginSession = electron.session.fromPartition("persist:ytmusic_login");
+      await loginSession.clearStorageData();
+    } catch (e) {
+      console.error("[YTMusicHandler] Failed to clear webview session:", e);
+    }
+    return { success: true };
+  });
+  electron.ipcMain.handle("ytmusic:get-home", async () => {
+    try {
+      return await getHome();
+    } catch (error) {
+      console.error("[YTMusicHandler] get-home error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-playlists", async () => {
+    try {
+      return await getUserPlaylists();
+    } catch (error) {
+      console.error("[YTMusicHandler] get-playlists error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-playlist", async (_, playlistId) => {
+    try {
+      return await getPlaylistDetails(playlistId);
+    } catch (error) {
+      console.error("[YTMusicHandler] get-playlist error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:search", async (_, query, options) => {
+    try {
+      return await search(query, options?.filter, options?.scope, options?.ignoreSpelling);
+    } catch (error) {
+      console.error("[YTMusicHandler] search error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-search-suggestions", async (_, query, detailedRuns) => {
+    try {
+      return await getSearchSuggestions(query, detailedRuns);
+    } catch (error) {
+      console.error("[YTMusicHandler] get-search-suggestions error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-song", async (_, videoId) => {
+    try {
+      return await getSongDetails(videoId);
+    } catch (error) {
+      console.error("[YTMusicHandler] get-song error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-watch-playlist", async (_, videoId, playlistId, radio) => {
+    try {
+      return await getWatchPlaylist(videoId, playlistId, 25, radio || false);
+    } catch (error) {
+      console.error("[YTMusicHandler] get-watch-playlist error:", error.message);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ytmusic:get-song-related", async (_, browseId) => {
+    try {
+      return await getSongRelated(browseId);
+    } catch (error) {
+      console.error("[YTMusicHandler] get-song-related error:", error.message);
+      throw error;
+    }
+  });
+}
+electron.app.commandLine.appendSwitch("ignore-certificate-errors");
+electron.protocol.registerSchemesAsPrivileged([
+  { scheme: "thumb-cache", privileges: { standard: false, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+]);
+let _cacheDir = null;
+let _cacheSettingsFile = null;
+const CACHE_DIR_GETTER = () => {
+  if (!_cacheDir) _cacheDir = path$1.join(electron.app.getPath("userData"), "audio-cache");
+  return _cacheDir;
+};
+const CACHE_SETTINGS_FILE_GETTER = () => {
+  if (!_cacheSettingsFile) _cacheSettingsFile = path$1.join(electron.app.getPath("userData"), "cache-settings.json");
+  return _cacheSettingsFile;
+};
+const DEFAULT_CACHE_SETTINGS = {
+  enabled: true,
+  maxSizeMB: 500
+};
+const INITIAL_PROXY_PORT = 47831;
+let currentProxyPort = INITIAL_PROXY_PORT;
+let proxyServer = null;
+const startProxyServer = () => {
+  if (proxyServer) return;
+  proxyServer = http.createServer(async (req, res) => {
+    try {
+      const reqUrl = new URL(req.url || "", `http://localhost:${currentProxyPort}`);
+      const pathname = reqUrl.pathname;
+      if (pathname === "/stream") {
+        const videoId = reqUrl.searchParams.get("id");
+        const quality = reqUrl.searchParams.get("quality") || "720";
+        if (!videoId) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing id parameter");
+          return;
+        }
+        const isDev2 = !electron.app.isPackaged;
+        const ffmpegPath = isDev2 ? path$1.join(__dirname, "../bin/ffmpeg.exe") : path$1.join(process.resourcesPath, "bin", "ffmpeg.exe");
+        console.log(`[Proxy] Streaming video: ${videoId} (${quality}p)`);
+        console.log(`[Proxy] Using ffmpeg from: ${ffmpegPath}`);
+        const formatSelector = `bv*[height<=${quality}]+ba/b[height<=${quality}]/b`;
+        const args = [
+          `https://www.youtube.com/watch?v=${videoId}`,
+          "-o",
+          "-",
+          // Output to stdout
+          "--format",
+          formatSelector,
+          "--ffmpeg-location",
+          ffmpegPath,
+          "--merge-output-format",
+          "mkv",
+          // MKV/WebM is streamable and supports VP9/Opus
+          "--no-warnings",
+          "--no-check-certificate",
+          "--no-progress",
+          "--quiet",
+          "--user-agent",
+          ELECTRON_USER_AGENT
+        ];
+        const ytProcess = child_process.spawn(ytDlpPath, args);
+        res.writeHead(200, {
+          "Content-Type": "video/webm",
+          "Access-Control-Allow-Origin": "*"
+          // 'Transfer-Encoding': 'chunked'
+        });
+        ytProcess.stdout.pipe(res);
+        ytProcess.stderr.on("data", (data) => {
+          const msg = data.toString();
+          if (msg.includes("Error") || msg.includes("headers")) {
+            console.error(`[Proxy] yt-dlp stderr: ${msg}`);
+          }
+        });
+        ytProcess.on("error", (err) => {
+          console.error("[Proxy] Process error:", err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end("Stream process error");
+          }
+        });
+        req.on("close", () => {
+          console.log("[Proxy] Client disconnected, killing process");
+          ytProcess.kill();
+        });
+        return;
+      }
+      if (pathname === "/audio") {
+        const videoId = reqUrl.searchParams.get("id");
+        const quality = reqUrl.searchParams.get("quality") || "high";
+        if (!videoId) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing id parameter");
+          return;
+        }
+        console.log(`[Proxy] Streaming audio: ${videoId} (quality: ${quality})`);
+        let formatSelector = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best";
+        if (quality === "medium") {
+          formatSelector = "bestaudio[abr<=128][ext=m4a]/bestaudio[abr<=128]/bestaudio";
+        } else if (quality === "low") {
+          formatSelector = "worstaudio[ext=m4a]/worstaudio";
+        }
+        const args = [
+          `https://www.youtube.com/watch?v=${videoId}`,
+          "-o",
+          "-",
+          // Output to stdout
+          "--format",
+          formatSelector,
+          "--no-warnings",
+          "--no-check-certificate",
+          "--user-agent",
+          ELECTRON_USER_AGENT,
+          "--no-playlist"
+        ];
+        const ytProcess = child_process.spawn(ytDlpPath, args);
+        res.writeHead(200, {
+          "Content-Type": "audio/mp4",
+          // m4a is audio/mp4
+          "Access-Control-Allow-Origin": "*",
+          "Transfer-Encoding": "chunked",
+          "Cache-Control": "no-cache"
+        });
+        ytProcess.stdout.pipe(res);
+        ytProcess.stderr.on("data", (data) => {
+          const msg = data.toString();
+          if (msg.includes("ERROR") || msg.includes("error")) {
+            console.error(`[Proxy] yt-dlp audio error: ${msg}`);
+          }
+        });
+        ytProcess.on("error", (err) => {
+          console.error("[Proxy] Audio process error:", err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end("Audio stream process error");
+          }
+        });
+        ytProcess.on("close", (code) => {
+          if (code !== 0 && code !== null) {
+            console.error(`[Proxy] yt-dlp exited with code ${code}`);
+          }
+        });
+        req.on("close", () => {
+          console.log("[Proxy] Audio client disconnected, killing process");
+          ytProcess.kill();
+        });
+        return;
+      }
+      if (pathname === "/playlist") {
+        const videoId = reqUrl.searchParams.get("id");
+        if (!videoId) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing id parameter");
+          return;
+        }
+        console.log(`[Proxy] Generating HLS playlist for: ${videoId}`);
+        try {
+          const args = [
+            `https://www.youtube.com/watch?v=${videoId}`,
+            "--dump-single-json",
+            "--no-warnings",
+            "--no-check-certificate",
+            "--user-agent",
+            ELECTRON_USER_AGENT
+          ];
+          const ytProcess = child_process.spawn(ytDlpPath, args);
+          let jsonOutput = "";
+          ytProcess.stdout.on("data", (data) => {
+            jsonOutput += data.toString();
+          });
+          ytProcess.on("close", (code) => {
+            if (code !== 0) {
+              res.writeHead(500, { "Content-Type": "text/plain" });
+              res.end("Failed to get video info");
+              return;
+            }
+            try {
+              const output = JSON.parse(jsonOutput);
+              const muxedFormats = (output.formats || []).filter(
+                (f) => f.vcodec !== "none" && f.acodec !== "none" && f.url && f.height
+              ).sort((a, b) => (b.height || 0) - (a.height || 0));
+              if (muxedFormats.length === 0) {
+                res.writeHead(404, { "Content-Type": "text/plain" });
+                res.end("No muxed formats available");
+                return;
+              }
+              let m3u8 = "#EXTM3U\n";
+              m3u8 += "#EXT-X-VERSION:3\n";
+              for (const format of muxedFormats) {
+                const bandwidth = format.tbr ? Math.round(format.tbr * 1e3) : format.height * 3e3;
+                const resolution = `${format.width || format.height * 16 / 9}x${format.height}`;
+                const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(format.url)}`;
+                m3u8 += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${format.height}p"
+`;
+                m3u8 += `${proxyUrl}
+`;
+              }
+              res.writeHead(200, {
+                "Content-Type": "application/vnd.apple.mpegurl",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-cache"
+              });
+              res.end(m3u8);
+              console.log(`[Proxy] Generated HLS playlist with ${muxedFormats.length} qualities`);
+            } catch (parseError) {
+              console.error("[Proxy] Failed to parse yt-dlp output:", parseError);
+              res.writeHead(500, { "Content-Type": "text/plain" });
+              res.end("Failed to parse video info");
+            }
+          });
+          ytProcess.on("error", (err) => {
+            console.error("[Proxy] yt-dlp error:", err);
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end("Failed to start yt-dlp");
+          });
+          return;
+        } catch (error) {
+          console.error("[Proxy] Playlist error:", error);
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end(`Playlist error: ${error.message}`);
+          return;
+        }
+      }
+      const targetUrl = reqUrl.searchParams.get("url");
+      if (!targetUrl) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Missing url or id parameter");
+        return;
+      }
+      const response = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": ELECTRON_USER_AGENT,
+          "Referer": "https://www.youtube.com/",
+          "Origin": "https://www.youtube.com"
+        }
+      });
+      if (!response.ok) {
+        res.writeHead(response.status);
+        res.end(`Upstream error: ${response.status}`);
+        return;
+      }
+      const contentType = response.headers.get("content-type") || "application/octet-stream";
+      const headers = {
+        "Content-Type": contentType,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*"
+      };
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, headers);
+        res.end();
+        return;
+      }
+      if (targetUrl.includes(".m3u8") || contentType.includes("mpegurl")) {
+        let content = await response.text();
+        content = content.replace(/^(https?:\/\/[^\s]+)/gm, (match) => {
+          return `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(match)}`;
+        });
+        res.writeHead(200, headers);
+        res.end(content);
+      } else {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        res.writeHead(200, { ...headers, "Content-Length": buffer.length.toString() });
+        res.end(buffer);
+      }
+    } catch (error) {
+      console.error("[HLS Proxy] Error:", error.message);
+      res.writeHead(500);
+      res.end(`Proxy error: ${error.message}`);
+    }
+  });
+  proxyServer.listen(currentProxyPort, () => {
+    console.log(`[Proxy] Server running on port ${currentProxyPort}`);
+  });
+  proxyServer.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.log(`[Proxy] Port ${currentProxyPort} in use, trying next port`);
+      currentProxyPort++;
+      proxyServer?.listen(currentProxyPort);
+    } else {
+      console.error("[Proxy] Server error:", err);
+    }
+  });
+};
+const ensureCacheDir = () => {
+  if (!fs$1.existsSync(CACHE_DIR_GETTER())) {
+    fs$1.mkdirSync(CACHE_DIR_GETTER(), { recursive: true });
+  }
+};
+const getCacheSettings = () => {
+  try {
+    if (fs$1.existsSync(CACHE_SETTINGS_FILE_GETTER())) {
+      const data = fs$1.readFileSync(CACHE_SETTINGS_FILE_GETTER(), "utf-8");
+      return { ...DEFAULT_CACHE_SETTINGS, ...JSON.parse(data) };
+    }
+  } catch (e) {
+    console.error("Error reading cache settings:", e);
+  }
+  return DEFAULT_CACHE_SETTINGS;
+};
+const saveCacheSettings = (settings) => {
+  try {
+    fs$1.writeFileSync(CACHE_SETTINGS_FILE_GETTER(), JSON.stringify(settings, null, 2));
+  } catch (e) {
+    console.error("Error saving cache settings:", e);
+  }
+};
+const getCacheEntries = () => {
+  ensureCacheDir();
+  const entries = [];
+  try {
+    const files = fs$1.readdirSync(CACHE_DIR_GETTER());
+    const metaFiles = files.filter((f) => f.endsWith(".meta.json"));
+    for (const metaFile of metaFiles) {
+      const key = metaFile.replace(".meta.json", "");
+      const audioPath = path$1.join(CACHE_DIR_GETTER(), `${key}.audio`);
+      const metaPath = path$1.join(CACHE_DIR_GETTER(), metaFile);
+      if (fs$1.existsSync(audioPath)) {
+        try {
+          const metadata = JSON.parse(fs$1.readFileSync(metaPath, "utf-8"));
+          entries.push({ key, metadata, audioPath });
+        } catch (e) {
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Error reading cache entries:", e);
+  }
+  return entries;
+};
+const getCacheSizeBytes = () => {
+  const entries = getCacheEntries();
+  return entries.reduce((total, entry) => total + (entry.metadata.size || 0), 0);
+};
+const evictIfNeeded = (maxSizeBytes, reserveBytes = 0) => {
+  const currentSize = getCacheSizeBytes();
+  const targetSize = maxSizeBytes - reserveBytes;
+  if (currentSize <= targetSize) return;
+  const entries = getCacheEntries();
+  entries.sort((a, b) => a.metadata.cachedAt - b.metadata.cachedAt);
+  let freedBytes = 0;
+  const bytesToFree = currentSize - targetSize;
+  for (const entry of entries) {
+    if (freedBytes >= bytesToFree) break;
+    try {
+      fs$1.unlinkSync(entry.audioPath);
+      fs$1.unlinkSync(path$1.join(CACHE_DIR_GETTER(), `${entry.key}.meta.json`));
+      freedBytes += entry.metadata.size;
+      console.log(`[Cache] Evicted: ${entry.key} (${entry.metadata.size} bytes)`);
+    } catch (e) {
+      console.error(`Error evicting ${entry.key}:`, e);
+    }
+  }
+};
+electron.ipcMain.handle("cache-get", async (_, key) => {
+  try {
+    const audioPath = path$1.join(CACHE_DIR_GETTER(), `${key}.audio`);
+    if (fs$1.existsSync(audioPath)) {
+      const data = fs$1.readFileSync(audioPath);
+      console.log(`[Cache] HIT: ${key}`);
+      return data.buffer;
+    }
+    console.log(`[Cache] MISS: ${key}`);
+    return null;
+  } catch (e) {
+    console.error("Cache get error:", e);
+    return null;
+  }
+});
+electron.ipcMain.handle("cache-put", async (_, key, data, metadata) => {
+  try {
+    const settings = getCacheSettings();
+    if (!settings.enabled) return false;
+    ensureCacheDir();
+    const maxSizeBytes = settings.maxSizeMB * 1024 * 1024;
+    const dataSize = data.byteLength;
+    if (dataSize > maxSizeBytes) {
+      console.log(`[Cache] File too large to cache: ${dataSize} bytes`);
+      return false;
+    }
+    evictIfNeeded(maxSizeBytes, dataSize);
+    const audioPath = path$1.join(CACHE_DIR_GETTER(), `${key}.audio`);
+    const metaPath = path$1.join(CACHE_DIR_GETTER(), `${key}.meta.json`);
+    const fullMetadata = {
+      trackId: "",
+      searchQuery: "",
+      ...metadata,
+      cachedAt: Date.now(),
+      size: dataSize
+    };
+    fs$1.writeFileSync(audioPath, Buffer.from(data));
+    fs$1.writeFileSync(metaPath, JSON.stringify(fullMetadata, null, 2));
+    console.log(`[Cache] STORED: ${key} (${dataSize} bytes)`);
+    return true;
+  } catch (e) {
+    console.error("Cache put error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-delete", async (_, key) => {
+  try {
+    const audioPath = path$1.join(CACHE_DIR_GETTER(), `${key}.audio`);
+    const metaPath = path$1.join(CACHE_DIR_GETTER(), `${key}.meta.json`);
+    if (fs$1.existsSync(audioPath)) fs$1.unlinkSync(audioPath);
+    if (fs$1.existsSync(metaPath)) fs$1.unlinkSync(metaPath);
+    console.log(`[Cache] DELETED: ${key}`);
+    return true;
+  } catch (e) {
+    console.error("Cache delete error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-clear", async () => {
+  try {
+    ensureCacheDir();
+    const files = fs$1.readdirSync(CACHE_DIR_GETTER());
+    for (const file of files) {
+      fs$1.unlinkSync(path$1.join(CACHE_DIR_GETTER(), file));
+    }
+    console.log("[Cache] CLEARED all entries");
+    return true;
+  } catch (e) {
+    console.error("Cache clear error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-stats", async () => {
+  try {
+    const entries = getCacheEntries();
+    const totalSize = entries.reduce((sum, e) => sum + e.metadata.size, 0);
+    return {
+      count: entries.length,
+      sizeBytes: totalSize,
+      sizeMB: Math.round(totalSize / (1024 * 1024) * 100) / 100
+    };
+  } catch (e) {
+    console.error("Cache stats error:", e);
+    return { count: 0, sizeBytes: 0, sizeMB: 0 };
+  }
+});
+electron.ipcMain.handle("cache-settings-get", async () => {
+  return getCacheSettings();
+});
+electron.ipcMain.handle("cache-settings-set", async (_, settings) => {
+  try {
+    const current = getCacheSettings();
+    const updated = { ...current, ...settings };
+    saveCacheSettings(updated);
+    if (updated.enabled && settings.maxSizeMB) {
+      evictIfNeeded(updated.maxSizeMB * 1024 * 1024);
+    }
+    return true;
+  } catch (e) {
+    console.error("Cache settings save error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("cache-list", async () => {
+  try {
+    const entries = getCacheEntries();
+    return entries.map((entry) => ({
+      key: entry.key,
+      trackId: entry.metadata.trackId,
+      searchQuery: entry.metadata.searchQuery,
+      cachedAt: entry.metadata.cachedAt,
+      sizeMB: Math.round(entry.metadata.size / (1024 * 1024) * 100) / 100
+    }));
+  } catch (e) {
+    console.error("Cache list error:", e);
+    return [];
+  }
+});
+const SONG_PREFS_FILE = path$1.join(electron.app.getPath("userData"), "song-preferences.json");
+const loadSongPreferences = () => {
+  try {
+    if (fs$1.existsSync(SONG_PREFS_FILE)) {
+      const data = fs$1.readFileSync(SONG_PREFS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading song preferences:", e);
+  }
+  return {};
+};
+const saveSongPreferences = (prefs) => {
+  try {
+    fs$1.writeFileSync(SONG_PREFS_FILE, JSON.stringify(prefs, null, 2));
+  } catch (e) {
+    console.error("Error saving song preferences:", e);
+  }
+};
+electron.ipcMain.handle("song-pref-get", async (_, trackKey) => {
+  try {
+    const prefs = loadSongPreferences();
+    return prefs[trackKey] || null;
+  } catch (e) {
+    console.error("Song pref get error:", e);
+    return null;
+  }
+});
+electron.ipcMain.handle(
+  "song-pref-set",
+  async (_, trackKey, preference) => {
+    try {
+      const prefs = loadSongPreferences();
+      prefs[trackKey] = {
+        ...preference,
+        savedAt: Date.now()
+      };
+      saveSongPreferences(prefs);
+      console.log(`[SongPref] Saved preference for: ${trackKey}`);
+      return true;
+    } catch (e) {
+      console.error("Song pref set error:", e);
+      return false;
+    }
+  }
+);
+electron.ipcMain.handle("song-pref-delete", async (_, trackKey) => {
+  try {
+    const prefs = loadSongPreferences();
+    if (prefs[trackKey]) {
+      delete prefs[trackKey];
+      saveSongPreferences(prefs);
+      console.log(`[SongPref] Deleted preference for: ${trackKey}`);
+    }
+    return true;
+  } catch (e) {
+    console.error("Song pref delete error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("song-pref-list", async () => {
+  try {
+    return loadSongPreferences();
+  } catch (e) {
+    console.error("Song pref list error:", e);
+    return {};
+  }
+});
+electron.ipcMain.handle("song-pref-clear", async () => {
+  try {
+    saveSongPreferences({});
+    console.log("[SongPref] Cleared all preferences");
+    return true;
+  } catch (e) {
+    console.error("Song pref clear error:", e);
+    return false;
+  }
+});
+const LYRICS_PREFS_FILE = path$1.join(electron.app.getPath("userData"), "lyrics-preferences.json");
+const loadLyricsPreferences = () => {
+  try {
+    if (fs$1.existsSync(LYRICS_PREFS_FILE)) {
+      const data = fs$1.readFileSync(LYRICS_PREFS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading lyrics preferences:", e);
+  }
+  return {};
+};
+const saveLyricsPreferences = (prefs) => {
+  try {
+    fs$1.writeFileSync(LYRICS_PREFS_FILE, JSON.stringify(prefs, null, 2));
+  } catch (e) {
+    console.error("Error saving lyrics preferences:", e);
+  }
+};
+electron.ipcMain.handle("lyrics-pref-get", async (_, trackKey) => {
+  try {
+    const prefs = loadLyricsPreferences();
+    return prefs[trackKey] || null;
+  } catch (e) {
+    console.error("Lyrics pref get error:", e);
+    return null;
+  }
+});
+electron.ipcMain.handle(
+  "lyrics-pref-set",
+  async (_, trackKey, preference) => {
+    try {
+      const prefs = loadLyricsPreferences();
+      prefs[trackKey] = {
+        ...preference,
+        savedAt: Date.now()
+      };
+      saveLyricsPreferences(prefs);
+      console.log(`[LyricsPref] Saved preference for: ${trackKey}`);
+      return true;
+    } catch (e) {
+      console.error("Lyrics pref set error:", e);
+      return false;
+    }
+  }
+);
+electron.ipcMain.handle("lyrics-pref-delete", async (_, trackKey) => {
+  try {
+    const prefs = loadLyricsPreferences();
+    if (prefs[trackKey]) {
+      delete prefs[trackKey];
+      saveLyricsPreferences(prefs);
+      console.log(`[LyricsPref] Deleted preference for: ${trackKey}`);
+    }
+    return true;
+  } catch (e) {
+    console.error("Lyrics pref delete error:", e);
+    return false;
+  }
+});
+let _savedPlaylistsFile = null;
+const getSavedPlaylistsFile = () => {
+  if (!_savedPlaylistsFile) _savedPlaylistsFile = path$1.join(electron.app.getPath("userData"), "saved-playlists.json");
+  return _savedPlaylistsFile;
+};
+let _playlistTracksFile = null;
+const getPlaylistTracksFile = () => {
+  if (!_playlistTracksFile) _playlistTracksFile = path$1.join(electron.app.getPath("userData"), "playlist-tracks.json");
+  return _playlistTracksFile;
+};
+const loadSavedPlaylists = () => {
+  try {
+    if (fs$1.existsSync(getSavedPlaylistsFile())) {
+      const data = fs$1.readFileSync(getSavedPlaylistsFile(), "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading saved playlists:", e);
+  }
+  return [];
+};
+const savePlaylists = (playlists) => {
+  try {
+    fs$1.writeFileSync(getSavedPlaylistsFile(), JSON.stringify(playlists, null, 2));
+  } catch (e) {
+    console.error("Error saving playlists:", e);
+  }
+};
+electron.ipcMain.handle("saved-playlists-get", async () => {
+  try {
+    return loadSavedPlaylists();
+  } catch (e) {
+    console.error("Saved playlists get error:", e);
+    return [];
+  }
+});
+electron.ipcMain.handle("saved-playlists-add", async (_, playlist) => {
+  try {
+    const playlists = loadSavedPlaylists();
+    if (playlists.some((p) => p.id === playlist.id)) {
+      console.log(`[Library] Playlist already saved: ${playlist.name}`);
+      return true;
+    }
+    playlists.unshift({ ...playlist, savedAt: Date.now() });
+    savePlaylists(playlists);
+    console.log(`[Library] Added playlist: ${playlist.name}`);
+    return true;
+  } catch (e) {
+    console.error("Saved playlists add error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("saved-playlists-remove", async (_, playlistId) => {
+  try {
+    const playlists = loadSavedPlaylists();
+    const filtered = playlists.filter((p) => p.id !== playlistId);
+    savePlaylists(filtered);
+    console.log(`[Library] Removed playlist: ${playlistId}`);
+    return true;
+  } catch (e) {
+    console.error("Saved playlists remove error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("saved-playlists-check", async (_, playlistId) => {
+  try {
+    const playlists = loadSavedPlaylists();
+    return playlists.some((p) => p.id === playlistId);
+  } catch (e) {
+    console.error("Saved playlists check error:", e);
+    return false;
+  }
+});
+const loadPlaylistTracks = () => {
+  try {
+    if (fs$1.existsSync(getPlaylistTracksFile())) {
+      const data = fs$1.readFileSync(getPlaylistTracksFile(), "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading playlist tracks:", e);
+  }
+  return {};
+};
+const savePlaylistTracks = (data) => {
+  try {
+    fs$1.writeFileSync(getPlaylistTracksFile(), JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error("Error saving playlist tracks:", e);
+  }
+};
+electron.ipcMain.handle("playlist-tracks-get", async (_, playlistId) => {
+  try {
+    const allTracks = loadPlaylistTracks();
+    return allTracks[playlistId] || [];
+  } catch (e) {
+    console.error("Playlist tracks get error:", e);
+    return [];
+  }
+});
+electron.ipcMain.handle("playlist-tracks-add", async (_, playlistId, track) => {
+  try {
+    const allTracks = loadPlaylistTracks();
+    if (!allTracks[playlistId]) allTracks[playlistId] = [];
+    if (!allTracks[playlistId].some((t) => t.id === track.id)) {
+      allTracks[playlistId].push(track);
+      savePlaylistTracks(allTracks);
+      const playlists = loadSavedPlaylists();
+      const pl = playlists.find((p) => p.id === playlistId);
+      if (pl) {
+        pl.trackCount = allTracks[playlistId].length;
+        savePlaylists(playlists);
+      }
+      console.log(`[Library] Added track "${track.name}" to playlist ${playlistId}`);
+    }
+    return true;
+  } catch (e) {
+    console.error("Playlist tracks add error:", e);
+    return false;
+  }
+});
+electron.ipcMain.handle("playlist-tracks-remove", async (_, playlistId, trackId) => {
+  try {
+    const allTracks = loadPlaylistTracks();
+    if (allTracks[playlistId]) {
+      allTracks[playlistId] = allTracks[playlistId].filter((t) => t.id !== trackId);
+      savePlaylistTracks(allTracks);
+      const playlists = loadSavedPlaylists();
+      const pl = playlists.find((p) => p.id === playlistId);
+      if (pl) {
+        pl.trackCount = allTracks[playlistId].length;
+        savePlaylists(playlists);
+      }
+    }
+    return true;
+  } catch (e) {
+    console.error("Playlist tracks remove error:", e);
+    return false;
+  }
+});
+let _spotifyStorageFile = null;
+const getSpotifyStorageFile = () => {
+  if (!_spotifyStorageFile) _spotifyStorageFile = path$1.join(electron.app.getPath("userData"), "spotify-session.json");
+  return _spotifyStorageFile;
+};
+const saveSpotifySession = (session2) => {
+  try {
+    fs$1.writeFileSync(SPOTIFY_STORAGE_FILE, JSON.stringify(session2, null, 2));
+    console.log("[Spotify] Session saved");
+  } catch (e) {
+    console.error("Error saving Spotify session:", e);
+  }
+};
+const loadSpotifySession = () => {
+  try {
+    if (fs$1.existsSync(getSpotifyStorageFile())) {
+      return JSON.parse(fs$1.readFileSync(getSpotifyStorageFile(), "utf-8"));
+    }
+  } catch (e) {
+    console.error("Error loading Spotify session:", e);
+  }
+  return null;
+};
+process.env.DIST = path$1.join(__dirname, "../dist");
+process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path$1.join(__dirname, "../public");
+let win;
+let tray = null;
+const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
+const isDev = !electron.app.isPackaged;
+const prodPath = path$1.join(process.resourcesPath, "bin", "yt-dlp.exe");
+const devPath = path$1.join(__dirname, "../bin/yt-dlp.exe");
+const ytDlpPath = isDev ? devPath : prodPath;
+if (!isDev && !fs$1.existsSync(ytDlpPath)) {
+  electron.dialog.showErrorBox("Critical Error", `yt-dlp.exe missing at:
+${ytDlpPath}`);
+}
+const ELECTRON_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const runYtDlp = (args) => {
+  return new Promise((resolve, reject) => {
+    child_process.execFile(ytDlpPath, args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error("yt-dlp error:", stderr);
+        reject(error);
+        return;
+      }
+      try {
+        const json = JSON.parse(stdout);
+        resolve(json);
+      } catch (parseError) {
+        console.error("JSON Parse Error:", parseError);
+        reject(parseError);
+      }
+    });
+  });
+};
+const pendingDownloads = /* @__PURE__ */ new Map();
+function createWindow() {
+  startProxyServer();
+  win = new electron.BrowserWindow({
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    icon: path$1.join(process.env.VITE_PUBLIC || "", "electron-vite.svg"),
+    autoHideMenuBar: true,
+    frame: false,
+    // Frameless window for custom title bar
+    titleBarStyle: "hidden",
+    // Hide native title bar
+    titleBarOverlay: {
+      // Windows: Show native window controls (minimize, maximize, close) with custom styling
+      color: "#121212",
+      // Background color of title bar overlay
+      symbolColor: "#ffffff",
+      // Color of window control icons
+      height: 40
+      // Height of the title bar area
+    },
+    backgroundColor: "#121212",
+    webPreferences: {
+      preload: path$1.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false
+    }
+  });
+  win.setMenuBarVisibility(false);
+  if (electron.app.isPackaged) {
+    win.webContents.on("before-input-event", (event, input) => {
+      if (input.key === "F12") {
+        event.preventDefault();
+      }
+      if (input.control && input.shift && ["I", "J", "C"].includes(input.key)) {
+        event.preventDefault();
+      }
+    });
+  }
+  win.webContents.on("did-finish-load", () => {
+    win?.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  });
+  win.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ["*://*.youtube.com/*", "*://*.googlevideo.com/*"] },
+    (details, callback) => {
+      const { requestHeaders } = details;
+      Object.keys(requestHeaders).forEach((header) => {
+        if (header.toLowerCase() === "referer" || header.toLowerCase() === "origin") {
+          delete requestHeaders[header];
+        }
+      });
+      requestHeaders["Referer"] = "https://www.youtube.com/";
+      requestHeaders["Origin"] = "https://www.youtube.com";
+      requestHeaders["User-Agent"] = ELECTRON_USER_AGENT;
+      callback({ requestHeaders });
+    }
+  );
+  win.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ["https://open.spotify.com/get_access_token*"] },
+    (details, callback) => {
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
+  win.webContents.session.on("will-download", (event, item, webContents) => {
+    const url = item.getURL();
+    const options = pendingDownloads.get(url) || { filename: "audio.mp3", saveAs: false };
+    if (options.filename) {
+      item.setSavePath(path$1.join(electron.app.getPath("downloads"), options.filename));
+    }
+    if (options.saveAs) {
+      const result = electron.dialog.showSaveDialogSync(win, {
+        defaultPath: options.filename,
+        filters: [{ name: "Audio Files", extensions: ["mp3", "m4a"] }]
+      });
+      if (result) item.setSavePath(result);
+      else {
+        item.cancel();
+        return;
+      }
+    }
+    item.on("updated", (event2, state) => {
+      if (state === "progressing" && !item.isPaused()) {
+        win?.webContents.send("download-progress", {
+          url,
+          progress: item.getReceivedBytes() / item.getTotalBytes(),
+          received: item.getReceivedBytes(),
+          total: item.getTotalBytes()
+        });
+      }
+    });
+    item.on("done", (event2, state) => {
+      pendingDownloads.delete(url);
+      win?.webContents.send("download-complete", {
+        url,
+        state,
+        path: item.getSavePath()
+      });
+    });
+  });
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(VITE_DEV_SERVER_URL);
+  } else {
+    win.loadFile(path$1.join(process.env.DIST || "", "index.html"));
+  }
+  if (!tray) {
+    const publicDir = process.env.VITE_PUBLIC || "";
+    const iconIco = path$1.join(publicDir, "icon.ico");
+    const iconPng = path$1.join(publicDir, "icon.png");
+    console.log("[Tray] Looking for icons at:", { iconIco, iconPng });
+    let trayIcon = null;
+    if (fs$1.existsSync(iconIco)) {
+      console.log("[Tray] Found .ico");
+      trayIcon = electron.nativeImage.createFromPath(iconIco);
+    } else if (fs$1.existsSync(iconPng)) {
+      console.log("[Tray] Found .png");
+      const image = electron.nativeImage.createFromPath(iconPng);
+      trayIcon = image.resize({ width: 16, height: 16 });
+    } else {
+      console.log("[Tray] No icon found, using fallback base64");
+      const iconDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADfSURBVDiNpZMxDoJAEEXfLhYmFjZewMbGxMQLeBN7C2+gd7Cx9AYcwNLL2GhjZ2dBQmICsptQCJBlJ5Ns8f/szOwfYKG1fkhBLoANsAMiYGcavsLME7AH4tQnhMBDAGugBlrmWQEBsAXutNYnM/8K7A1rlFJlEi+B+H8MEbABbrXWRynnBRb/JQihYg4wBrrm/hxomLlvYEFmDuwDG6BttN4FXGQZEAPXQNnMbcKQKaVKJdADQq31ycRChh4wABpG6x0hjYGhuT8DamYOZv6aWMjLwNDcHwNV8/cBeAe/iyFO7WBXRQAAAABJRU5ErkJggg==";
+      trayIcon = electron.nativeImage.createFromDataURL(iconDataUrl);
+    }
+    if (trayIcon) {
+      tray = new electron.Tray(trayIcon);
+      tray.setToolTip("Ragam Music Player");
+      const contextMenu = electron.Menu.buildFromTemplate([
+        {
+          label: "Show App",
+          click: () => {
+            if (win) {
+              win.show();
+              win.focus();
+            }
+          }
+        },
+        {
+          label: "Minimize to Tray",
+          click: () => {
+            win?.hide();
+          }
+        },
+        { type: "separator" },
+        {
+          label: "Play/Pause",
+          click: () => {
+            win?.webContents.send("tray-playpause");
+          }
+        },
+        {
+          label: "Next Track",
+          click: () => {
+            win?.webContents.send("tray-next");
+          }
+        },
+        {
+          label: "Previous Track",
+          click: () => {
+            win?.webContents.send("tray-previous");
+          }
+        },
+        { type: "separator" },
+        {
+          label: "Quit",
+          click: () => {
+            electron.app.quit();
+          }
+        }
+      ]);
+      tray.setContextMenu(contextMenu);
+      tray.on("double-click", () => {
+        if (win) {
+          win.show();
+          win.focus();
+        }
+      });
+    }
+  }
+}
+electron.ipcMain.handle("youtube-search-video", async (_, query) => {
+  try {
+    console.log(`[YouTube Video Search] Searching: ${query}`);
+    const args = [
+      `ytsearch5:${query}`,
+      "--dump-single-json",
+      "--flat-playlist",
+      // Get metadata only (fast)
+      "--no-warnings",
+      "--no-check-certificate"
+    ];
+    const output = await runYtDlp(args);
+    if (!output || !output.entries) {
+      return [];
+    }
+    return output.entries.map((video) => ({
+      id: video.id,
+      title: video.title,
+      thumbnail: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+      channel: video.uploader,
+      duration: video.duration
+    }));
+  } catch (error) {
+    console.error("[YouTube Video Search] Error:", error);
+    return [];
+  }
+});
+electron.ipcMain.handle("youtube-search", async (_, query, region = "US") => {
+  try {
+    console.log(`[YouTube Music] Searching: ${query} (Region: ${region})`);
+    const searchUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+    const args = [
+      searchUrl,
+      "--dump-single-json",
+      "--playlist-items",
+      "1,2,3,4,5,6,7,8,9,10",
+      "--flat-playlist",
+      "--no-warnings",
+      "--no-check-certificate",
+      "--geo-bypass-country",
+      region
+      // Apply User Region
+    ];
+    const output = await runYtDlp(args);
+    if (!output || !output.entries) return [];
+    return output.entries.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      channelTitle: entry.uploader || entry.artist || "YouTube Music",
+      duration: entry.duration,
+      thumbnail: `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
+      artists: [{ name: entry.uploader || entry.artist || "Unknown" }]
+    }));
+  } catch (error) {
+    console.warn("YTM Search failed, falling back to standard ytsearch:", error.message);
+    try {
+      const fbArgs = [
+        query,
+        "--dump-single-json",
+        "--default-search",
+        "ytsearch5:",
+        "--flat-playlist",
+        "--no-warnings",
+        "--no-check-certificate",
+        "--geo-bypass-country",
+        region
+      ];
+      const fbOutput = await runYtDlp(fbArgs);
+      if (!fbOutput || !fbOutput.entries) return [];
+      return fbOutput.entries.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        channelTitle: entry.uploader,
+        duration: entry.duration,
+        thumbnail: `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
+        artists: [{ name: entry.uploader }]
+      }));
+    } catch (fbError) {
+      console.error("Fallback Search Error:", fbError);
+      return [];
+    }
+  }
+});
+electron.ipcMain.handle("youtube-stream", async (_, videoId, quality = "high") => {
+  try {
+    console.log(`[YouTube] Fetching Stream for: ${videoId} (Quality: ${quality})`);
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    let formatSelector = "bestaudio/best";
+    if (quality === "medium") {
+      formatSelector = "bestaudio[abr<=128]/bestaudio";
+    } else if (quality === "low") {
+      formatSelector = "worstaudio";
+    }
+    const args = [
+      url,
+      "--dump-single-json",
+      "--no-warnings",
+      "--no-check-certificate",
+      "--format",
+      formatSelector
+    ];
+    const output = await runYtDlp(args);
+    if (!output || !output.url) throw new Error("No stream URL found");
+    console.log(`[YouTube] Returning direct audio URL for: ${videoId}`);
+    return {
+      url: output.url,
+      // Direct YouTube URL for seeking support
+      duration: output.duration,
+      title: output.title
+    };
+  } catch (error) {
+    console.error("[YouTube] Stream Extraction Error:", error);
+    return null;
+  }
+});
+electron.ipcMain.handle("youtube-video-url", async (_, videoId) => {
+  try {
+    console.log(`[YouTube] Fetching HLS Stream for: ${videoId}`);
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const args = [url, "--dump-single-json", "--no-warnings", "--no-check-certificate"];
+    const output = await runYtDlp(args);
+    let streamUrl = output.manifest_url;
+    if (!streamUrl && output.formats) {
+      const hlsFormat = output.formats.find(
+        (f) => f.protocol === "m3u8" || f.protocol === "m3u8_native"
+      );
+      if (hlsFormat) {
+        streamUrl = hlsFormat.url;
+      }
+    }
+    if (!streamUrl) {
+      console.log("No HLS found, falling back to MP4");
+      const mp4Format = output.formats.reverse().find((f) => f.ext === "mp4" && f.acodec !== "none" && f.vcodec !== "none");
+      streamUrl = mp4Format ? mp4Format.url : output.url;
+    }
+    if (!streamUrl) throw new Error("No video stream found");
+    return {
+      url: streamUrl,
+      title: output.title,
+      isHls: streamUrl.includes(".m3u8")
+    };
+  } catch (error) {
+    console.error("[YouTube] Video Stream Error:", error);
+    return null;
+  }
+});
+electron.ipcMain.handle("youtube-video-stream", async (_, videoId, maxHeight = 1080) => {
+  try {
+    console.log(`[YouTube] Fetching Video Stream for: ${videoId} (Max Height: ${maxHeight}p)`);
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const args = [
+      url,
+      "--dump-single-json",
+      "--no-warnings",
+      "--no-check-certificate",
+      "--user-agent",
+      ELECTRON_USER_AGENT
+    ];
+    const output = await runYtDlp(args);
+    if (!output) throw new Error("No data returned from yt-dlp");
+    let hlsUrl = output.manifest_url;
+    if (!hlsUrl && output.formats) {
+      const hlsFormat = output.formats.find(
+        (f) => f.protocol === "m3u8" || f.protocol === "m3u8_native" || f.url && f.url.includes(".m3u8")
+      );
+      if (hlsFormat) {
+        hlsUrl = hlsFormat.url;
+      }
+    }
+    if (hlsUrl) {
+      console.log(`[YouTube] Found HLS manifest for adaptive quality`);
+      const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(hlsUrl)}`;
+      return {
+        type: "hls",
+        url: proxyUrl,
+        isHls: true,
+        title: output.title,
+        duration: output.duration,
+        thumbnail: output.thumbnail,
+        qualities: ["auto", "1080p", "720p", "480p", "360p", "240p"]
+        // HLS has all
+      };
+    }
+    console.log(`[YouTube] No native HLS, using yt-dlp piped streaming`);
+    const videoFormats = output.formats?.filter(
+      (f) => f.vcodec !== "none" && f.height && f.height >= 144
+      // Filter out tiny formats
+    ).sort((a, b) => (b.height || 0) - (a.height || 0)) || [];
+    const heightSet = new Set(videoFormats.map((f) => f.height));
+    const allHeights = Array.from(heightSet).filter((h) => h && h >= 144).sort((a, b) => b - a);
+    if (allHeights.length > 0) {
+      const selectedHeight = allHeights.find((h) => h <= maxHeight) || allHeights[allHeights.length - 1];
+      const availableQualities = allHeights.map((h) => `${h}p`);
+      const streamUrl = `http://localhost:${currentProxyPort}/stream?id=${videoId}&quality=${selectedHeight}`;
+      console.log(`[YouTube] Returning ${selectedHeight}p piped stream (${availableQualities.length} qualities: ${availableQualities.slice(0, 5).join(", ")}...)`);
+      return {
+        type: "muxed",
+        url: streamUrl,
+        // Piped through yt-dlp with on-the-fly merging
+        isHls: false,
+        height: selectedHeight,
+        format: "webm",
+        title: output.title,
+        duration: output.duration,
+        thumbnail: output.thumbnail,
+        qualities: availableQualities
+      };
+    }
+    console.log(`[YouTube] No formats available, trying fallback formats 22/18`);
+    const fallbackArgs = [
+      url,
+      "--dump-single-json",
+      "--no-warnings",
+      "--no-check-certificate",
+      "--format",
+      "22/18",
+      "--user-agent",
+      ELECTRON_USER_AGENT
+    ];
+    const fallbackOutput = await runYtDlp(fallbackArgs);
+    if (fallbackOutput?.url) {
+      const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(fallbackOutput.url)}`;
+      return {
+        type: "muxed",
+        url: proxyUrl,
+        isHls: false,
+        height: fallbackOutput.height || 360,
+        format: "mp4",
+        title: fallbackOutput.title,
+        duration: fallbackOutput.duration,
+        thumbnail: fallbackOutput.thumbnail,
+        qualities: [`${fallbackOutput.height || 360}p`]
+      };
+    }
+    throw new Error("No video URL found");
+  } catch (error) {
+    console.error("[YouTube] Video Stream Error:", error);
+    return null;
+  }
+});
+electron.ipcMain.handle("download-start", async (_, { url, filename, saveAs }) => {
+  try {
+    pendingDownloads.set(url, { filename, saveAs });
+    win?.webContents.downloadURL(url);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+electron.ipcMain.handle("spotify-login", async () => {
+  return new Promise((resolve, reject) => {
+    const authWindow = new electron.BrowserWindow({
+      width: 800,
+      height: 600,
+      show: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        partition: "persist:spotify_login",
+        webSecurity: false
+      }
+    });
+    const authSession = authWindow.webContents.session;
+    authSession.webRequest.onBeforeRequest(
+      { urls: ["*://*.spotify.com/*/service-worker.js"] },
+      (details, callback) => {
+        callback({ cancel: true });
+      }
+    );
+    authWindow.loadURL("https://accounts.spotify.com/en/login");
+    let isResolved = false;
+    let spDcCookie = null;
+    const checkLoginSuccess = async () => {
+      if (isResolved || authWindow.isDestroyed()) return;
+      try {
+        const currentUrl = authWindow.webContents.getURL();
+        if (currentUrl.includes("accounts.spotify.com/en/status") || currentUrl.includes("open.spotify.com")) {
+          if (currentUrl.includes("accounts.spotify.com")) {
+            console.log("[Spotify Auth] Redirecting to open.spotify.com");
+            authWindow.loadURL("https://open.spotify.com/");
+            return;
+          }
+          const cookies = await authSession.cookies.get({
+            name: "sp_dc",
+            url: "https://open.spotify.com"
+          });
+          if (cookies.length === 0) {
+            console.log("[Spotify Auth] No sp_dc cookie yet, retrying...");
+            return;
+          }
+          spDcCookie = cookies[0].value;
+          console.log("[Spotify Auth] Got sp_dc cookie, length:", spDcCookie.length);
+          clearInterval(cookieCheckInterval);
+          console.log("[Spotify Auth] Using TOTP authentication...");
+          try {
+            const result = await spotifyAuth.loginWithSpDc(spDcCookie);
+            if (result.success && result.accessToken) {
+              console.log("[Spotify Auth] TOTP login successful");
+              const session2 = {
+                accessToken: result.accessToken,
+                accessTokenExpirationTimestampMs: result.expiration || Date.now() + 36e5,
+                clientId: "",
+                isAnonymous: false,
+                spDcCookie,
+                savedAt: Date.now()
+              };
+              saveSpotifySession(session2);
+              isResolved = true;
+              resolve(session2);
+              setTimeout(() => {
+                if (!authWindow.isDestroyed()) authWindow.close();
+              }, 500);
+            } else {
+              throw new Error(result.error || "TOTP login failed");
+            }
+          } catch (authError) {
+            console.error("[Spotify Auth] TOTP error:", authError);
+            reject(new Error(`Token fetch failed: ${authError.message}`));
+            authWindow.close();
+          }
+        }
+      } catch (error) {
+        console.error("[Spotify Auth] Check error:", error);
+      }
+    };
+    const cookieCheckInterval = setInterval(checkLoginSuccess, 1e3);
+    authWindow.on("closed", () => {
+      clearInterval(cookieCheckInterval);
+      if (!isResolved) {
+        reject(new Error("Login cancelled by user"));
+      }
+    });
+  });
+});
+electron.ipcMain.handle("spotify-refresh-token", async (_, storedSpDc) => {
+  if (!storedSpDc) {
+    const session2 = loadSpotifySession();
+    if (!session2) return { success: false, error: "No stored session" };
+    storedSpDc = session2.spDcCookie;
+  }
+  console.log("[Spotify Refresh] Using TOTP authentication...");
+  try {
+    const result = await spotifyAuth.loginWithSpDc(storedSpDc);
+    if (result.success && result.accessToken) {
+      const session2 = {
+        accessToken: result.accessToken,
+        accessTokenExpirationTimestampMs: result.expiration || Date.now() + 36e5,
+        clientId: "",
+        isAnonymous: false,
+        spDcCookie: storedSpDc,
+        savedAt: Date.now()
+      };
+      saveSpotifySession(session2);
+      return {
+        success: true,
+        accessToken: result.accessToken,
+        accessTokenExpirationTimestampMs: result.expiration
+      };
+    } else {
+      return { success: false, error: result.error };
+    }
+  } catch (e) {
+    console.error("[Spotify Refresh] TOTP error:", e);
+    return { success: false, error: e.message };
+  }
+});
+electron.ipcMain.handle("spotify-check-session", async () => {
+  const session2 = loadSpotifySession();
+  if (session2 && Date.now() < session2.accessTokenExpirationTimestampMs) {
+    return { success: true, ...session2 };
+  }
+  return { success: false };
+});
+electron.ipcMain.handle("spotify-logout", async () => {
+  if (fs$1.existsSync(SPOTIFY_STORAGE_FILE)) {
+    fs$1.unlinkSync(SPOTIFY_STORAGE_FILE);
+  }
+  return { success: true };
+});
+electron.ipcMain.handle("ytmusic-login", async () => {
+  return new Promise((resolve, reject) => {
+    const authWindow = new electron.BrowserWindow({
+      width: 900,
+      height: 700,
+      show: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        partition: "persist:ytmusic_login",
+        webSecurity: false
+      }
+    });
+    const authSession = authWindow.webContents.session;
+    authWindow.loadURL("https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com/");
+    let isResolved = false;
+    const checkLoginSuccess = async () => {
+      if (isResolved || authWindow.isDestroyed()) return;
+      try {
+        const currentUrl = authWindow.webContents.getURL();
+        const isOnYTMusic = currentUrl.includes("music.youtube.com");
+        if (isOnYTMusic) {
+          const allCookies = await authSession.cookies.get({ url: "https://music.youtube.com" });
+          const hasSID = allCookies.some((c) => c.name === "SID");
+          const hasSAPISID = allCookies.some((c) => c.name === "SAPISID" || c.name === "__Secure-3PAPISID");
+          if (hasSID && hasSAPISID) {
+            const cookieString = allCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+            console.log("[YTMusic Auth] Login detected! Cookies:", allCookies.map((c) => c.name).join(", "));
+            isResolved = true;
+            clearInterval(cookieCheckInterval);
+            setCookies(cookieString);
+            setTimeout(() => {
+              if (!authWindow.isDestroyed()) authWindow.close();
+            }, 500);
+            resolve({ success: true });
+          }
+        }
+      } catch (error) {
+        console.error("[YTMusic Auth] Check error:", error);
+      }
+    };
+    const cookieCheckInterval = setInterval(checkLoginSuccess, 2e3);
+    authWindow.on("closed", () => {
+      clearInterval(cookieCheckInterval);
+      if (!isResolved) {
+        reject(new Error("Login cancelled by user"));
+      }
+    });
+  });
+});
+initYTMusicHandlers();
+electron.app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    electron.app.quit();
+    win = null;
+  }
+});
+electron.app.on("activate", () => {
+  if (electron.BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
+});
+electron.app.whenReady().then(() => {
+  registerThumbProtocol();
+  restoreSession();
+  initSpotifyHandlers();
+  createWindow();
+});

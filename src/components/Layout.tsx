@@ -30,20 +30,15 @@ export default function Layout() {
         </div>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto bg-background scrollbar-thin scrollbar-thumb-secondary scrollbar-track-transparent ">
-          {/* FIX: Added 'pb-32' (padding-bottom: 8rem) 
-             This ensures the last item in your list scrolls ABOVE the player bar.
-          */}
-          <div className="pl-2 pb-32 min-h-full">
+        <main role="main" className="flex-1 overflow-y-auto bg-background scrollbar-thin scrollbar-thumb-secondary scrollbar-track-transparent ">
+          <div className="pl-2 pb-[var(--player-height)] min-h-full">
             <Outlet />
           </div>
         </main>
       </div>
 
-      {/* Persistent Player Bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border/10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <Player />
-      </div>
+      {/* Player Bar — solid background, no transparency */}
+      <Player />
     </div>
   )
 }

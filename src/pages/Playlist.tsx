@@ -1,15 +1,16 @@
-import { useEffect, useState, useMemo, useCallback, memo } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useState, useMemo, useCallback, memo, useRef } from 'react'
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { getPlaylist, getAllPlaylistTracks } from '@/services/spotifyservice'
 import { SpotifyPlaylist, SpotifyTrack } from '@/types/spotify'
 import TrackItem from '@/components/TrackItem'
-import { Play, Pause, Clock, Shuffle, Search, X, Plus, Check } from 'lucide-react'
+import { Play, Pause, Clock, Shuffle, Search, X, Plus, Check, Music2, Home } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePlayer } from '@/context/PlayerContext'
 import { toast } from 'sonner'
+import { List } from 'react-window'
 
 // Memoized search input to prevent re-renders
 const SearchInput = memo(({ value, onChange, onClear }: { 
@@ -24,7 +25,7 @@ const SearchInput = memo(({ value, onChange, onClear }: {
       placeholder="Search in playlist..."
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="pl-10 pr-10 bg-secondary/50 border border-white/10 focus:border-primary focus:outline-none rounded-full transition-colors"
+      className="pl-10 pr-10 bg-secondary/50 border border-border/10 focus:border-primary focus:outline-none rounded-full transition-colors"
     />
     {value && (
       <Button
@@ -32,6 +33,7 @@ const SearchInput = memo(({ value, onChange, onClear }: {
         size="icon"
         className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full"
         onClick={onClear}
+        aria-label="Clear search"
       >
         <X className="h-4 w-4" />
       </Button>
@@ -95,6 +97,7 @@ const PlaylistControls = memo(({
         onClick={handlePlayPause}
         className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-full p-4 h-auto w-auto"
         disabled={tracks.length === 0 || fetchingAllTracks}
+        aria-label={isPlaylistPlaying ? 'Pause' : 'Play'}
       >
         {isPlaylistPlaying ? <Pause size={28} /> : <Play size={28} />}
       </Button>
@@ -103,7 +106,7 @@ const PlaylistControls = memo(({
         variant="outline"
         className="rounded-full p-3"
         disabled={tracks.length === 0 || fetchingAllTracks}
-        title="Shuffle playlist"
+        aria-label="Shuffle playlist"
       >
         <Shuffle size={20} />
       </Button>
@@ -114,11 +117,40 @@ const PlaylistControls = memo(({
   )
 })
 
+// Virtualized row renderer (react-window v2 API)
+interface TrackRowProps {
+  tracks: SpotifyTrack[]
+}
+
+const TrackRow = (props: {
+  ariaAttributes: { 'aria-posinset': number; 'aria-setsize': number; role: 'listitem' }
+  index: number
+  style: React.CSSProperties
+} & TrackRowProps): React.ReactElement | null => {
+  const { index, style, tracks } = props
+  const track = tracks[index]
+  if (!track) return null
+  return (
+    <div style={style}>
+      <TrackItem
+        track={track}
+        index={index}
+        showCover={true}
+        showAlbum={true}
+        showIndex={true}
+      />
+    </div>
+  )
+}
+
+const TRACK_ROW_HEIGHT = 56
+
 const Playlist = () => {
   const { playlistId } = useParams<{ playlistId: string }>()
   const [searchParams] = useSearchParams()
   const isYTMusic = searchParams.get('source') === 'ytmusic'
   const { spotifyToken } = useSpotifyAuth()
+  const navigate = useNavigate()
 
   const [playlist, setPlaylist] = useState<SpotifyPlaylist | null>(null)
   const [tracks, setTracks] = useState<SpotifyTrack[]>([])
@@ -128,13 +160,32 @@ const Playlist = () => {
   
   // Saved to library state
   const [isSaved, setIsSaved] = useState(false)
+
+  // Container ref for measuring virtualized list height
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  const [listHeight, setListHeight] = useState(600)
   
   // Stable callback references to prevent SearchInput re-renders
   const handleSearchClear = useCallback(() => setSearchQuery(''), [])
 
+  // Measure available height for virtualized list
+  useEffect(() => {
+    const measure = () => {
+      if (listContainerRef.current) {
+        const rect = listContainerRef.current.getBoundingClientRect()
+        setListHeight(Math.max(300, window.innerHeight - rect.top - 32))
+      }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [loading])
+
   useEffect(() => {
     if (playlistId) {
-      if (isYTMusic) {
+      if (playlistId.startsWith('local-')) {
+        fetchLocalPlaylist()
+      } else if (isYTMusic) {
         fetchYTMusicPlaylist()
       } else if (spotifyToken) {
         fetchPlaylistDetails()
@@ -142,6 +193,34 @@ const Playlist = () => {
       }
     }
   }, [spotifyToken, playlistId, isYTMusic])
+
+  const fetchLocalPlaylist = async () => {
+    setLoading(true)
+    try {
+      // Get playlist metadata
+      const allPlaylists = await window.electron.savedPlaylists.getAll()
+      const pl = allPlaylists.find((p: any) => p.id === playlistId)
+      if (pl) {
+        setPlaylist({
+          id: pl.id,
+          name: pl.name,
+          description: pl.description || '',
+          images: pl.imageUrl ? [{ url: pl.imageUrl, height: 300, width: 300 }] : [],
+          owner: { id: 'local', display_name: 'You' },
+          tracks: { total: pl.trackCount || 0 }
+        })
+        setIsSaved(true)
+      }
+      // Get tracks from local storage
+      const localTracks = await window.electron.playlistTracks.get(playlistId!)
+      setTracks(localTracks || [])
+    } catch (error) {
+      console.error('Error loading local playlist:', error)
+      toast.error('Failed to load playlist')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const fetchYTMusicPlaylist = async () => {
     setLoading(true)
@@ -228,11 +307,14 @@ const Playlist = () => {
       : tracks
   }, [searchQuery, tracks])
 
+  // Use virtualization only when track count exceeds threshold
+  const useVirtualization = filteredTracks.length > 100
+
   if (loading) {
     return (
       <div>
         <div className="flex items-start gap-6 mb-8 pt-5">
-          <Skeleton className="h-44 w-44 rounded-lg" />
+          <Skeleton className="h-32 w-32 sm:h-40 sm:w-40 lg:h-48 lg:w-48 rounded-lg" />
           <div className="flex-1">
             <Skeleton className="h-5 w-20 mb-2" />
             <Skeleton className="h-12 w-64 mb-4" />
@@ -252,13 +334,24 @@ const Playlist = () => {
   }
 
   if (!playlist) {
-    return <div className="text-center py-10">Playlist not found</div>
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <Music2 className="h-16 w-16 text-muted-foreground/50" />
+        <h2 className="text-xl font-semibold text-foreground">Playlist not found</h2>
+        <p className="text-sm text-muted-foreground">This playlist may have been removed or the link is invalid.</p>
+        <Button onClick={() => navigate('/')} variant="outline" className="mt-2 rounded-full px-6">
+          <Home className="h-4 w-4 mr-2" />
+          Go Home
+        </Button>
+      </div>
+    )
   }
 
   return (
     <div>
       <header className="flex items-center gap-6 mb-8 pt-5">
-        <div className="h-44 w-44 bg-gray-800/50 rounded-lg overflow-hidden shadow-lg">
+        {/* Responsive cover art (#13) + theme-aware bg (#11) */}
+        <div className="h-32 w-32 sm:h-40 sm:w-40 lg:h-48 lg:w-48 bg-card/50 rounded-lg overflow-hidden shadow-lg shrink-0">
           {playlist.images?.[0] && (
             <img
               src={playlist.images[0].url}
@@ -274,8 +367,8 @@ const Playlist = () => {
             {playlist.description || `${playlist.tracks.total} songs`}
           </p>
           
-          {/* Add to Library Button */}
-          <button
+          {/* Add to Library Button — using shadcn Button (#15) */}
+          <Button
             onClick={async () => {
               if (isSaved) return
               try {
@@ -293,14 +386,15 @@ const Playlist = () => {
                 toast.error('Failed to save playlist')
               }
             }}
-            className={`mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            variant={isSaved ? 'ghost' : 'outline'}
+            className={`mt-4 rounded-full px-4 ${
               isSaved 
                 ? 'bg-primary/20 text-primary cursor-default' 
                 : 'bg-white/10 hover:bg-primary text-white hover:text-primary-foreground'
             }`}
           >
-            {isSaved ? <><Check className="h-4 w-4" /> Added to Library</> : <><Plus className="h-4 w-4" /> Add to Library</>}
-          </button>
+            {isSaved ? <><Check className="h-4 w-4 mr-2" /> Added to Library</> : <><Plus className="h-4 w-4 mr-2" /> Add to Library</>}
+          </Button>
         </div>
       </header>
 
@@ -326,17 +420,28 @@ const Playlist = () => {
         </div>
 
         {filteredTracks.length > 0 ? (
-          <div className="mt-2">
-            {filteredTracks.map((track, index) => (
-              <TrackItem
-                key={`${track.id}-${index}`}
-                track={track}
-                index={index}
-                showCover={true}
-                showAlbum={true}
-                showIndex={true}
+          <div className="mt-2" ref={listContainerRef}>
+            {useVirtualization ? (
+              <List<TrackRowProps>
+                style={{ height: listHeight }}
+                rowCount={filteredTracks.length}
+                rowHeight={TRACK_ROW_HEIGHT}
+                rowComponent={TrackRow}
+                rowProps={{ tracks: filteredTracks } as any}
+                overscanCount={10}
               />
-            ))}
+            ) : (
+              filteredTracks.map((track, index) => (
+                <TrackItem
+                  key={`${track.id}-${index}`}
+                  track={track}
+                  index={index}
+                  showCover={true}
+                  showAlbum={true}
+                  showIndex={true}
+                />
+              ))
+            )}
           </div>
         ) : searchQuery ? (
           <div className="text-center py-10">

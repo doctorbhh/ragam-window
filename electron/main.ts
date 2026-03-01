@@ -17,9 +17,17 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'thumb-cache', privileges: { standard: false, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ])
 
-// --- CACHE CONFIGURATION ---
-const CACHE_DIR = path.join(app.getPath('userData'), 'audio-cache')
-const CACHE_SETTINGS_FILE = path.join(app.getPath('userData'), 'cache-settings.json')
+// --- CACHE CONFIGURATION (lazy to avoid app.getPath before ready) ---
+let _cacheDir: string | null = null
+let _cacheSettingsFile: string | null = null
+const CACHE_DIR_GETTER = () => {
+  if (!_cacheDir) _cacheDir = path.join(app.getPath('userData'), 'audio-cache')
+  return _cacheDir
+}
+const CACHE_SETTINGS_FILE_GETTER = () => {
+  if (!_cacheSettingsFile) _cacheSettingsFile = path.join(app.getPath('userData'), 'cache-settings.json')
+  return _cacheSettingsFile
+}
 
 interface CacheMetadata {
   trackId: string
@@ -395,16 +403,16 @@ const getProxyPort = () => currentProxyPort
 
 // Ensure cache directory exists
 const ensureCacheDir = () => {
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true })
+  if (!fs.existsSync(CACHE_DIR_GETTER())) {
+    fs.mkdirSync(CACHE_DIR_GETTER(), { recursive: true })
   }
 }
 
 // Get cache settings
 const getCacheSettings = (): CacheSettings => {
   try {
-    if (fs.existsSync(CACHE_SETTINGS_FILE)) {
-      const data = fs.readFileSync(CACHE_SETTINGS_FILE, 'utf-8')
+    if (fs.existsSync(CACHE_SETTINGS_FILE_GETTER())) {
+      const data = fs.readFileSync(CACHE_SETTINGS_FILE_GETTER(), 'utf-8')
       return { ...DEFAULT_CACHE_SETTINGS, ...JSON.parse(data) }
     }
   } catch (e) {
@@ -416,7 +424,7 @@ const getCacheSettings = (): CacheSettings => {
 // Save cache settings
 const saveCacheSettings = (settings: CacheSettings) => {
   try {
-    fs.writeFileSync(CACHE_SETTINGS_FILE, JSON.stringify(settings, null, 2))
+    fs.writeFileSync(CACHE_SETTINGS_FILE_GETTER(), JSON.stringify(settings, null, 2))
   } catch (e) {
     console.error('Error saving cache settings:', e)
   }
@@ -428,13 +436,13 @@ const getCacheEntries = (): { key: string; metadata: CacheMetadata; audioPath: s
   const entries: { key: string; metadata: CacheMetadata; audioPath: string }[] = []
 
   try {
-    const files = fs.readdirSync(CACHE_DIR)
+    const files = fs.readdirSync(CACHE_DIR_GETTER())
     const metaFiles = files.filter((f) => f.endsWith('.meta.json'))
 
     for (const metaFile of metaFiles) {
       const key = metaFile.replace('.meta.json', '')
-      const audioPath = path.join(CACHE_DIR, `${key}.audio`)
-      const metaPath = path.join(CACHE_DIR, metaFile)
+      const audioPath = path.join(CACHE_DIR_GETTER(), `${key}.audio`)
+      const metaPath = path.join(CACHE_DIR_GETTER(), metaFile)
 
       if (fs.existsSync(audioPath)) {
         try {
@@ -477,7 +485,7 @@ const evictIfNeeded = (maxSizeBytes: number, reserveBytes: number = 0) => {
 
     try {
       fs.unlinkSync(entry.audioPath)
-      fs.unlinkSync(path.join(CACHE_DIR, `${entry.key}.meta.json`))
+      fs.unlinkSync(path.join(CACHE_DIR_GETTER(), `${entry.key}.meta.json`))
       freedBytes += entry.metadata.size
       console.log(`[Cache] Evicted: ${entry.key} (${entry.metadata.size} bytes)`)
     } catch (e) {
@@ -492,7 +500,7 @@ ipcMain.handle('cache-get', async (_, key: string) => {
     // NOTE: We intentionally do NOT check if cache is enabled here.
     // This allows existing cached songs to be used even when caching is disabled.
     // The cache-put handler checks the enabled setting to prevent NEW caching.
-    const audioPath = path.join(CACHE_DIR, `${key}.audio`)
+    const audioPath = path.join(CACHE_DIR_GETTER(), `${key}.audio`)
     if (fs.existsSync(audioPath)) {
       const data = fs.readFileSync(audioPath)
       console.log(`[Cache] HIT: ${key}`)
@@ -524,8 +532,8 @@ ipcMain.handle('cache-put', async (_, key: string, data: ArrayBuffer, metadata: 
     // Evict old entries to make room
     evictIfNeeded(maxSizeBytes, dataSize)
 
-    const audioPath = path.join(CACHE_DIR, `${key}.audio`)
-    const metaPath = path.join(CACHE_DIR, `${key}.meta.json`)
+    const audioPath = path.join(CACHE_DIR_GETTER(), `${key}.audio`)
+    const metaPath = path.join(CACHE_DIR_GETTER(), `${key}.meta.json`)
 
     const fullMetadata: CacheMetadata = {
       trackId: '',
@@ -547,8 +555,8 @@ ipcMain.handle('cache-put', async (_, key: string, data: ArrayBuffer, metadata: 
 
 ipcMain.handle('cache-delete', async (_, key: string) => {
   try {
-    const audioPath = path.join(CACHE_DIR, `${key}.audio`)
-    const metaPath = path.join(CACHE_DIR, `${key}.meta.json`)
+    const audioPath = path.join(CACHE_DIR_GETTER(), `${key}.audio`)
+    const metaPath = path.join(CACHE_DIR_GETTER(), `${key}.meta.json`)
 
     if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
     if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath)
@@ -563,9 +571,9 @@ ipcMain.handle('cache-delete', async (_, key: string) => {
 ipcMain.handle('cache-clear', async () => {
   try {
     ensureCacheDir()
-    const files = fs.readdirSync(CACHE_DIR)
+    const files = fs.readdirSync(CACHE_DIR_GETTER())
     for (const file of files) {
-      fs.unlinkSync(path.join(CACHE_DIR, file))
+      fs.unlinkSync(path.join(CACHE_DIR_GETTER(), file))
     }
     console.log('[Cache] CLEARED all entries')
     return true
@@ -814,7 +822,18 @@ ipcMain.handle('lyrics-pref-delete', async (_, trackKey: string) => {
 
 // --- SAVED PLAYLISTS LIBRARY ---
 // Stores playlists that user saves from search to their local library
-const SAVED_PLAYLISTS_FILE = path.join(app.getPath('userData'), 'saved-playlists.json')
+let _savedPlaylistsFile: string | null = null
+const getSavedPlaylistsFile = () => {
+  if (!_savedPlaylistsFile) _savedPlaylistsFile = path.join(app.getPath('userData'), 'saved-playlists.json')
+  return _savedPlaylistsFile
+}
+
+// Track storage per playlist
+let _playlistTracksFile: string | null = null
+const getPlaylistTracksFile = () => {
+  if (!_playlistTracksFile) _playlistTracksFile = path.join(app.getPath('userData'), 'playlist-tracks.json')
+  return _playlistTracksFile
+}
 
 interface SavedPlaylist {
   id: string
@@ -829,8 +848,8 @@ interface SavedPlaylist {
 // Load saved playlists
 const loadSavedPlaylists = (): SavedPlaylist[] => {
   try {
-    if (fs.existsSync(SAVED_PLAYLISTS_FILE)) {
-      const data = fs.readFileSync(SAVED_PLAYLISTS_FILE, 'utf-8')
+    if (fs.existsSync(getSavedPlaylistsFile())) {
+      const data = fs.readFileSync(getSavedPlaylistsFile(), 'utf-8')
       return JSON.parse(data)
     }
   } catch (e) {
@@ -842,7 +861,7 @@ const loadSavedPlaylists = (): SavedPlaylist[] => {
 // Save playlists to file
 const savePlaylists = (playlists: SavedPlaylist[]) => {
   try {
-    fs.writeFileSync(SAVED_PLAYLISTS_FILE, JSON.stringify(playlists, null, 2))
+    fs.writeFileSync(getSavedPlaylistsFile(), JSON.stringify(playlists, null, 2))
   } catch (e) {
     console.error('Error saving playlists:', e)
   }
@@ -902,8 +921,89 @@ ipcMain.handle('saved-playlists-check', async (_, playlistId: string) => {
   }
 })
 
+// --- PLAYLIST TRACKS STORAGE ---
+// Maps playlistId -> track[] for user-created playlists
+const loadPlaylistTracks = (): Record<string, any[]> => {
+  try {
+    if (fs.existsSync(getPlaylistTracksFile())) {
+      const data = fs.readFileSync(getPlaylistTracksFile(), 'utf-8')
+      return JSON.parse(data)
+    }
+  } catch (e) {
+    console.error('Error loading playlist tracks:', e)
+  }
+  return {}
+}
+
+const savePlaylistTracks = (data: Record<string, any[]>) => {
+  try {
+    fs.writeFileSync(getPlaylistTracksFile(), JSON.stringify(data, null, 2))
+  } catch (e) {
+    console.error('Error saving playlist tracks:', e)
+  }
+}
+
+ipcMain.handle('playlist-tracks-get', async (_, playlistId: string) => {
+  try {
+    const allTracks = loadPlaylistTracks()
+    return allTracks[playlistId] || []
+  } catch (e) {
+    console.error('Playlist tracks get error:', e)
+    return []
+  }
+})
+
+ipcMain.handle('playlist-tracks-add', async (_, playlistId: string, track: any) => {
+  try {
+    const allTracks = loadPlaylistTracks()
+    if (!allTracks[playlistId]) allTracks[playlistId] = []
+    // Avoid duplicates
+    if (!allTracks[playlistId].some((t: any) => t.id === track.id)) {
+      allTracks[playlistId].push(track)
+      savePlaylistTracks(allTracks)
+      // Also update track count on the playlist
+      const playlists = loadSavedPlaylists()
+      const pl = playlists.find(p => p.id === playlistId)
+      if (pl) {
+        pl.trackCount = allTracks[playlistId].length
+        savePlaylists(playlists)
+      }
+      console.log(`[Library] Added track "${track.name}" to playlist ${playlistId}`)
+    }
+    return true
+  } catch (e) {
+    console.error('Playlist tracks add error:', e)
+    return false
+  }
+})
+
+ipcMain.handle('playlist-tracks-remove', async (_, playlistId: string, trackId: string) => {
+  try {
+    const allTracks = loadPlaylistTracks()
+    if (allTracks[playlistId]) {
+      allTracks[playlistId] = allTracks[playlistId].filter((t: any) => t.id !== trackId)
+      savePlaylistTracks(allTracks)
+      // Update count 
+      const playlists = loadSavedPlaylists()
+      const pl = playlists.find(p => p.id === playlistId)
+      if (pl) {
+        pl.trackCount = allTracks[playlistId].length
+        savePlaylists(playlists)
+      }
+    }
+    return true
+  } catch (e) {
+    console.error('Playlist tracks remove error:', e)
+    return false
+  }
+})
+
 // --- SPOTIFY SESSION STORAGE ---
-const SPOTIFY_STORAGE_FILE = path.join(app.getPath('userData'), 'spotify-session.json');
+let _spotifyStorageFile: string | null = null
+const getSpotifyStorageFile = () => {
+  if (!_spotifyStorageFile) _spotifyStorageFile = path.join(app.getPath('userData'), 'spotify-session.json')
+  return _spotifyStorageFile
+}
 
 interface SpotifySession {
   accessToken: string;
@@ -925,8 +1025,8 @@ const saveSpotifySession = (session: SpotifySession) => {
 
 const loadSpotifySession = (): SpotifySession | null => {
   try {
-    if (fs.existsSync(SPOTIFY_STORAGE_FILE)) {
-      return JSON.parse(fs.readFileSync(SPOTIFY_STORAGE_FILE, 'utf-8'));
+    if (fs.existsSync(getSpotifyStorageFile())) {
+      return JSON.parse(fs.readFileSync(getSpotifyStorageFile(), 'utf-8'));
     }
   } catch (e) {
     console.error('Error loading Spotify session:', e);

@@ -133,6 +133,12 @@ contextBridge.exposeInMainWorld('electron', {
     check: (playlistId: string) => ipcRenderer.invoke('saved-playlists-check', playlistId)
   },
 
+  playlistTracks: {
+    get: (playlistId: string) => ipcRenderer.invoke('playlist-tracks-get', playlistId),
+    add: (playlistId: string, track: object) => ipcRenderer.invoke('playlist-tracks-add', playlistId, track),
+    remove: (playlistId: string, trackId: string) => ipcRenderer.invoke('playlist-tracks-remove', playlistId, trackId)
+  },
+
   tray: {
     onPlayPause: (callback: () => void) =>
       ipcRenderer.on('tray-playpause', () => callback()),
