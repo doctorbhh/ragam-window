@@ -1,5 +1,6 @@
-import { X, Loader2, MonitorPlay, Settings, Volume2, VolumeX, Maximize, Pause, Play } from 'lucide-react'
+import { X, Loader2, MonitorPlay, Settings, Volume2, VolumeX, Maximize, Pause, Play, List } from 'lucide-react'
 import { useState, useEffect, useRef, useCallback } from 'react'
+import Hls from 'hls.js'
 
 // Quality options
 const QUALITY_OPTIONS = [
@@ -17,7 +18,7 @@ interface VideoModalProps {
 }
 
 interface VideoStreamData {
-  type: 'muxed' | 'dash'
+  type: 'muxed' | 'dash' | 'hls'
   url?: string
   videoUrl?: string
   audioUrl?: string
@@ -27,6 +28,16 @@ interface VideoStreamData {
   width?: number
   format?: string
   thumbnail?: string
+  isHls?: boolean
+  qualities?: string[]
+}
+
+interface VideoSearchResult {
+  id: string
+  title: string
+  thumbnail: string
+  channel: string
+  duration: number
 }
 
 const VideoModal = ({
@@ -48,15 +59,18 @@ const VideoModal = ({
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [showControls, setShowControls] = useState(true)
-  const [selectedQuality, setSelectedQuality] = useState(720)
+  const [selectedQuality, setSelectedQuality] = useState(1080)
   const [showQualityMenu, setShowQualityMenu] = useState(false)
+  const [searchResults, setSearchResults] = useState<VideoSearchResult[]>([])
+  const [showPicker, setShowPicker] = useState(false)
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const hlsRef = useRef<Hls | null>(null)
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Search for video ID if not provided
+  // Search for video ID using yt-dlp (via Electron IPC)
   useEffect(() => {
     const searchYouTubeVideo = async () => {
       if (hardcodedVideoId) {
@@ -70,38 +84,31 @@ const VideoModal = ({
         return
       }
 
+      setLoading(true)
+
       try {
         const query = `${trackName} ${artistName} official music video`
-        const res = await fetch(
-          `https://pipedapi.kavin.rocks/search?q=${encodeURIComponent(query)}&filter=videos`
-        )
+        console.log('[VideoModal] Searching via yt-dlp:', query)
+        
+        const results = await window.electron.youtube.searchVideo(query)
 
-        if (!res.ok) throw new Error('Search failed')
-
-        const data = await res.json()
-
-        if (data.items?.length > 0) {
-          const url = data.items[0].url
-          const id = url.split('v=')[1]?.split('&')[0]
-          if (id) {
-            setFinalVideoId(id)
-          } else {
-            setError('Invalid video URL')
-            setLoading(false)
-          }
+        if (results && results.length > 0) {
+          console.log('[VideoModal] Found', results.length, 'videos')
+          setSearchResults(results)
+          setFinalVideoId(results[0].id)
         } else {
           setError('No video found')
           setLoading(false)
         }
       } catch (err) {
-        console.error('YouTube search failed:', err)
+        console.error('[VideoModal] yt-dlp search failed:', err)
         setError('Failed to find video')
         setLoading(false)
       }
     }
 
     searchYouTubeVideo()
-  }, [trackName, artistName, hardcodedVideoId])
+  }, [trackName, artistName, hardcodedVideoId, retryCount])
 
   // Fetch video stream when we have a video ID
   useEffect(() => {
@@ -139,6 +146,12 @@ const VideoModal = ({
     const video = videoRef.current
     const audio = audioRef.current
 
+    // Destroy any previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
     // Clear any existing sources
     video.pause()
     video.src = ''
@@ -147,7 +160,67 @@ const VideoModal = ({
       audio.src = ''
     }
 
-    if (streamData.type === 'muxed' && streamData.url) {
+    if (streamData.type === 'hls' && streamData.url) {
+      // HLS: Use hls.js for Chromium/Electron (no native HLS support)
+      console.log('[VideoModal] Setting up HLS playback:', streamData.url.substring(0, 80) + '...')
+
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+        })
+        hlsRef.current = hls
+
+        hls.loadSource(streamData.url)
+        hls.attachMedia(video)
+
+        hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+          console.log('[VideoModal] HLS manifest parsed, levels:', data.levels.length)
+          video.play().catch(e => {
+            console.error('HLS video play failed:', e)
+            setError('Failed to play video. Try a different quality.')
+          })
+        })
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          console.error('[VideoModal] HLS error:', data.type, data.details)
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.log('[VideoModal] HLS network error, trying to recover...')
+                hls.startLoad()
+                break
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                console.log('[VideoModal] HLS media error, trying to recover...')
+                hls.recoverMediaError()
+                break
+              default:
+                setError('Failed to play HLS stream. Try a different quality.')
+                hls.destroy()
+                break
+            }
+          }
+        })
+
+        return () => {
+          hls.destroy()
+          hlsRef.current = null
+        }
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Safari native HLS (unlikely in Electron, but just in case)
+        video.src = streamData.url
+        video.load()
+        video.play().catch(e => {
+          console.error('Native HLS play failed:', e)
+          setError('Failed to play video.')
+        })
+      } else {
+        setError('HLS playback is not supported in this environment.')
+      }
+
+    } else if (streamData.type === 'muxed' && streamData.url) {
       // Muxed MP4: Direct playback (most reliable)
       console.log('[VideoModal] Setting up muxed MP4 playback:', streamData.height + 'p')
       video.src = streamData.url
@@ -198,8 +271,16 @@ const VideoModal = ({
         video.removeEventListener('seeked', syncAudio)
         video.removeEventListener('timeupdate', syncAudio)
       }
+    } else {
+      console.error('[VideoModal] Unknown stream type or missing data:', streamData.type)
+      setError(`Unsupported stream type: ${streamData.type}`)
     }
   }, [streamData])
+
+  // Effective duration: prefer browser-reported duration, fall back to streamData.duration from yt-dlp
+  const effectiveDuration = (duration && isFinite(duration) && duration > 0)
+    ? duration
+    : (streamData?.duration || 0)
 
   // Common video event listeners
   useEffect(() => {
@@ -209,11 +290,18 @@ const VideoModal = ({
     const onPlay = () => setIsPlaying(true)
     const onPause = () => setIsPlaying(false)
     const onTimeUpdate = () => setCurrentTime(video.currentTime)
-    const onDurationChange = () => setDuration(video.duration)
-    const onError = (e: Event) => {
-      console.error('Video error:', e)
-      // Don't set error if already set or if no source
-      if (!error && video.src) {
+    const onDurationChange = () => {
+      if (isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration)
+      }
+    }
+    const onLoadedMetadata = () => {
+      if (isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration)
+      }
+    }
+    const onError = () => {
+      if (video.src) {
         setError('Video playback failed. Try a different quality.')
       }
     }
@@ -222,6 +310,7 @@ const VideoModal = ({
     video.addEventListener('pause', onPause)
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('durationchange', onDurationChange)
+    video.addEventListener('loadedmetadata', onLoadedMetadata)
     video.addEventListener('error', onError)
 
     return () => {
@@ -229,9 +318,10 @@ const VideoModal = ({
       video.removeEventListener('pause', onPause)
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('durationchange', onDurationChange)
+      video.removeEventListener('loadedmetadata', onLoadedMetadata)
       video.removeEventListener('error', onError)
     }
-  }, [error])
+  }, [streamData])
 
   // Sync volume changes with audio element (for DASH)
   useEffect(() => {
@@ -266,10 +356,10 @@ const VideoModal = ({
   }
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!videoRef.current || !duration) return
+    if (!videoRef.current || !effectiveDuration) return
     const rect = e.currentTarget.getBoundingClientRect()
     const percent = (e.clientX - rect.left) / rect.width
-    const newTime = percent * duration
+    const newTime = percent * effectiveDuration
     videoRef.current.currentTime = newTime
     if (audioRef.current) {
       audioRef.current.currentTime = newTime
@@ -305,6 +395,19 @@ const VideoModal = ({
     setRetryCount((prev) => prev + 1)
   }
 
+  const handleVideoSwitch = (videoId: string) => {
+    setFinalVideoId(videoId)
+    setShowPicker(false)
+    setError(null)
+  }
+
+  const formatDuration = (seconds: number) => {
+    if (!seconds || !isFinite(seconds)) return ''
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
   if (loading) {
     return (
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/95 backdrop-blur-md p-4">
@@ -323,7 +426,6 @@ const VideoModal = ({
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/95 backdrop-blur-md p-4"
-      onClick={onClose}
     >
       <div
         ref={containerRef}
@@ -396,7 +498,7 @@ const VideoModal = ({
                 >
                   <div 
                     className="h-full bg-red-500 rounded-full relative group-hover:h-1.5 transition-all"
-                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                    style={{ width: `${effectiveDuration ? (currentTime / effectiveDuration) * 100 : 0}%` }}
                   >
                     <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
@@ -431,7 +533,7 @@ const VideoModal = ({
 
                     {/* Time */}
                     <span className="text-sm text-zinc-300">
-                      {formatTime(currentTime)} / {formatTime(duration)}
+                      {formatTime(currentTime)} / {formatTime(effectiveDuration)}
                     </span>
                   </div>
 
@@ -443,25 +545,47 @@ const VideoModal = ({
                         className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 transition flex items-center gap-2 text-sm"
                       >
                         <Settings size={16} />
-                        {streamData?.height || selectedQuality}p
+                        {streamData?.type === 'hls' ? 'Auto' : `${streamData?.height || selectedQuality}p`}
                       </button>
                       
                       {showQualityMenu && (
                         <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 rounded-lg overflow-hidden shadow-xl">
-                          {QUALITY_OPTIONS.map((option) => (
-                            <button
-                              key={option.value}
-                              onClick={() => handleQualityChange(option.value)}
-                              className={`w-full px-4 py-2 text-left hover:bg-zinc-700 transition text-sm ${
-                                selectedQuality === option.value ? 'bg-red-600' : ''
-                              }`}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
+                          {streamData?.type === 'hls' && streamData.qualities ? (
+                            streamData.qualities.map((q) => (
+                              <button
+                                key={q}
+                                className="w-full px-4 py-2 text-left hover:bg-zinc-700 transition text-sm bg-red-600/50 cursor-default"
+                              >
+                                {q} (auto)
+                              </button>
+                            ))
+                          ) : (
+                            QUALITY_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                onClick={() => handleQualityChange(option.value)}
+                                className={`w-full px-4 py-2 text-left hover:bg-zinc-700 transition text-sm ${
+                                  selectedQuality === option.value ? 'bg-red-600' : ''
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))
+                          )}
                         </div>
                       )}
                     </div>
+
+                    {/* Video Picker Toggle */}
+                    {searchResults.length > 1 && (
+                      <button
+                        onClick={() => setShowPicker(!showPicker)}
+                        className={`p-2 rounded-full transition ${showPicker ? 'bg-red-600' : 'hover:bg-white/20'}`}
+                        title="Switch video"
+                      >
+                        <List size={20} />
+                      </button>
+                    )}
 
                     {/* Fullscreen */}
                     <button 
@@ -479,6 +603,52 @@ const VideoModal = ({
                   {streamData?.height && <span className="text-zinc-500 ml-2">({streamData.height}p {streamData.format || 'mp4'})</span>}
                 </p>
               </div>
+              {/* Video Picker Panel */}
+              {showPicker && searchResults.length > 1 && (
+                <div className="absolute top-0 right-0 w-80 h-full bg-black/95 backdrop-blur-sm border-l border-zinc-700 overflow-y-auto z-[60]">
+                  <div className="p-3 border-b border-zinc-700 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur-sm">
+                    <span className="text-sm font-medium text-zinc-300">Choose a video</span>
+                    <button
+                      onClick={() => setShowPicker(false)}
+                      className="p-1 rounded hover:bg-zinc-700 transition"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  {searchResults.map((result, index) => (
+                    <button
+                      key={result.id}
+                      onClick={() => handleVideoSwitch(result.id)}
+                      className={`w-full p-3 flex gap-3 text-left transition hover:bg-zinc-800 ${
+                        finalVideoId === result.id ? 'bg-zinc-800 border-l-2 border-red-500' : ''
+                      }`}
+                    >
+                      <div className="relative flex-shrink-0 w-28 h-16 rounded overflow-hidden bg-zinc-800">
+                        <img
+                          src={result.thumbnail}
+                          alt={result.title}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                        {result.duration > 0 && (
+                          <span className="absolute bottom-1 right-1 text-[10px] bg-black/80 px-1 rounded">
+                            {formatDuration(result.duration)}
+                          </span>
+                        )}
+                        {finalVideoId === result.id && (
+                          <div className="absolute inset-0 bg-red-500/20 flex items-center justify-center">
+                            <Play size={20} className="text-white" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-zinc-200 line-clamp-2 leading-tight">{result.title}</p>
+                        <p className="text-[10px] text-zinc-500 mt-1 truncate">{result.channel}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>

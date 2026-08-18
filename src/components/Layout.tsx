@@ -3,18 +3,24 @@ import { Player } from './Player'
 import { TitleBar } from './TitleBar'
 import { Outlet } from 'react-router-dom'
 import { useEffect } from 'react'
-import { getTheme } from '@/services/instanceService'
+import { getTheme, getRagamMode } from '@/services/instanceService'
 
 export default function Layout() {
   useEffect(() => {
     // Apply saved theme on startup
     const savedTheme = getTheme()
-    document.documentElement.classList.remove('theme-kdon', 'theme-mello')
+    const savedMode = getRagamMode()
+    document.documentElement.classList.remove('theme-kdon', 'theme-mello', 'theme-ragam', 'ragam-light')
     
     if (savedTheme === 'kdon') {
       document.documentElement.classList.add('theme-kdon')
     } else if (savedTheme === 'mello') {
       document.documentElement.classList.add('theme-mello')
+    } else if (savedTheme === 'ragam') {
+      document.documentElement.classList.add('theme-ragam')
+      if (savedMode === 'light') {
+        document.documentElement.classList.add('ragam-light')
+      }
     }
   }, [])
 
@@ -31,7 +37,7 @@ export default function Layout() {
 
         {/* Main Content Area */}
         <main role="main" className="flex-1 overflow-y-auto bg-background scrollbar-thin scrollbar-thumb-secondary scrollbar-track-transparent ">
-          <div className="pl-2 pb-[var(--player-height)] min-h-full">
+          <div className="pl-2 pb-40 min-h-full">
             <Outlet />
           </div>
         </main>

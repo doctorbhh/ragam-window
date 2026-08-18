@@ -1,7 +1,7 @@
-import React, { createContext, useState, useContext, useRef, useEffect } from 'react'
+import React, { createContext, useState, useContext, useRef, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import { smartSearch, searchYouTubeVideo, searchJioSaavnResults } from '@/services/youtubeService'
-import { getAudioQuality, getStoredVolume, setStoredVolume, getAudioNormalization, setAudioNormalization } from '@/services/instanceService'
+import { getAudioQuality, getStoredVolume, setStoredVolume, getAudioNormalization, setAudioNormalization, getPlayerSession, setPlayerSession } from '@/services/instanceService'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { trackListening } from '@/services/firebaseRecommendations'
 import { SpotifyTrack } from '@/types/spotify'
@@ -98,6 +98,92 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // HTML5 Audio requires CORS clearance if Web Audio node connects to it
     audioRef.current.crossOrigin = 'anonymous' 
   }, []) // Run once on mount to set initial volume
+
+  // --- Session Persistence: Restore on Mount (with stream pre-load) ---
+  const sessionRestoredRef = useRef(false)
+  useEffect(() => {
+    if (sessionRestoredRef.current) return
+    sessionRestoredRef.current = true
+    const saved = getPlayerSession()
+    if (!saved?.currentTrack) return
+
+    const track = saved.currentTrack as SpotifyTrack
+    setCurrentTrack(track)
+    setQueue(saved.queue || [])
+    setProgress(saved.progress || 0)
+
+    // Pre-load the stream in background (no auto-play)
+    const prepareStream = async () => {
+      try {
+        const artistName = track.artists?.[0]?.name || ''
+        const allArtists = track.artists?.map((a: any) => a.name).join('_') || ''
+        const cacheKey = getCacheKey(track.name, allArtists)
+
+        // 1. Check audio cache
+        const cachedUrl = await getCachedAudio(cacheKey)
+        if (cachedUrl) {
+          audioRef.current.src = cachedUrl
+          audioRef.current.volume = volume
+          audioRef.current.currentTime = saved.progress || 0
+          setDuration(audioRef.current.duration || 0)
+          console.log('[Session] Stream ready from cache:', track.name)
+          return
+        }
+
+        // 2. Check song ID cache
+        const cachedSongId = getSongIdFromCache(cacheKey)
+        if (cachedSongId) {
+          const streamData = await fetchStreamUrl(
+            cachedSongId.provider === 'youtube'
+              ? { id: cachedSongId.sourceId }
+              : { url: cachedSongId.sourceId }
+          )
+          if (streamData?.url) {
+            audioRef.current.src = streamData.url
+            audioRef.current.volume = volume
+            audioRef.current.currentTime = saved.progress || 0
+            console.log('[Session] Stream ready from song ID cache:', track.name)
+            return
+          }
+        }
+
+        // 3. Fallback: search and resolve
+        const query = `${track.name} ${artistName} song`
+        const [musicResults] = await Promise.all([
+          smartSearch(query)
+        ])
+        for (const result of musicResults) {
+          try {
+            const streamData = await fetchStreamUrl(result)
+            if (streamData?.url) {
+              audioRef.current.src = streamData.url
+              audioRef.current.volume = volume
+              audioRef.current.currentTime = saved.progress || 0
+              console.log('[Session] Stream ready from search:', track.name)
+              return
+            }
+          } catch { /* try next */ }
+        }
+
+        console.warn('[Session] Could not pre-load stream for:', track.name)
+      } catch (e) {
+        console.warn('[Session] Stream pre-load failed:', e)
+      }
+    }
+
+    prepareStream()
+  }, [])
+
+  // --- Session Persistence: Debounced Save on Change ---
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!currentTrack) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      setPlayerSession({ currentTrack, queue, progress })
+    }, 2000)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [currentTrack, queue, progress])
 
   // --- Web Audio API Initialization ---
   const initAudioContext = () => {

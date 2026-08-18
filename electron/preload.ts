@@ -167,6 +167,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('ytmusic:get-watch-playlist', videoId, playlistId, radio),
     getSongRelated: (browseId: string) =>
       ipcRenderer.invoke('ytmusic:get-song-related', browseId),
+  },
+
+  ytdlp: {
+    checkUpdate: () => ipcRenderer.invoke('ytdlp:check-update'),
+    update: () => ipcRenderer.invoke('ytdlp:update'),
+    importCookies: () => ipcRenderer.invoke('ytdlp:import-cookies'),
+    cookieStatus: () => ipcRenderer.invoke('ytdlp:cookie-status'),
+    clearCookies: () => ipcRenderer.invoke('ytdlp:clear-cookies')
   }
 })
 

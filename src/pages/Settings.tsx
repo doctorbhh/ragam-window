@@ -12,7 +12,16 @@ import {
   ChevronRight,
   Check,
   Sparkles,
-  Keyboard
+  Keyboard,
+  Download,
+  RefreshCw,
+  Wrench,
+  Loader2,
+  Cookie,
+  FileText,
+  X,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -48,7 +57,8 @@ import {
   getAudioNormalization,
   setAudioNormalization,
   getTheme,
-  setTheme
+  setTheme,
+  getRagamMode
 } from '@/services/instanceService'
 import {
   getCacheSettings,
@@ -91,6 +101,12 @@ const THEMES = [
     name: 'MelloStudio', 
     description: 'Carbon black with red accents',
     colors: ['#E91E63', '#121212', '#1f1f1f']
+  },
+  { 
+    id: 'ragam', 
+    name: 'Ragam', 
+    description: 'Rose red with waveform player',
+    colors: ['#E11D48', '#181818', '#121212']
   }
 ]
 
@@ -159,6 +175,17 @@ const Settings = () => {
   const [cacheStats, setCacheStats] = useState<CacheStats>({ count: 0, sizeBytes: 0, sizeMB: 0 })
   const [cacheLoading, setCacheLoading] = useState(false)
 
+  // yt-dlp updater state
+  const [ytdlpVersion, setYtdlpVersion] = useState('')
+  const [ytdlpLatest, setYtdlpLatest] = useState('')
+  const [ytdlpUpdateAvailable, setYtdlpUpdateAvailable] = useState(false)
+  const [ytdlpChecking, setYtdlpChecking] = useState(false)
+  const [ytdlpUpdating, setYtdlpUpdating] = useState(false)
+
+  // Cookie state
+  const [cookieMode, setCookieMode] = useState<'file' | 'browser' | 'none'>('none')
+  const [cookieImporting, setCookieImporting] = useState(false)
+
   useEffect(() => {
     setCurrentQuality(getAudioQuality())
     setCurrentProvider(getSearchProvider())
@@ -166,6 +193,7 @@ const Settings = () => {
     setNormalizationEnabled(getAudioNormalization())
     setCurrentTheme(getTheme())
     loadCacheSettings()
+    loadCookieStatus()
   }, [])
 
   const handleQualityChange = (value: string) => {
@@ -195,14 +223,18 @@ const Settings = () => {
   const handleThemeChange = (value: string) => {
     setTheme(value)
     setCurrentTheme(value)
-    document.documentElement.classList.remove('theme-kdon', 'theme-mello')
+    document.documentElement.classList.remove('theme-kdon', 'theme-mello', 'theme-ragam', 'ragam-light')
     if (value !== 'default') {
       document.documentElement.classList.add(`theme-${value}`)
+      if (value === 'ragam' && getRagamMode() === 'light') {
+        document.documentElement.classList.add('ragam-light')
+      }
     }
     const themeNames: Record<string, string> = {
       default: 'Default',
       kdon: 'KDON',
-      mello: 'MelloStudio'
+      mello: 'MelloStudio',
+      ragam: 'Ragam'
     }
     toast.success(`Theme set to ${themeNames[value] || 'Default'}`)
   }
@@ -248,6 +280,81 @@ const Settings = () => {
       toast.error('Failed to clear cache')
     } finally {
       setCacheLoading(false)
+    }
+  }
+
+  const handleCheckYtDlpUpdate = async () => {
+    setYtdlpChecking(true)
+    try {
+      const result = await window.electron.ytdlp.checkUpdate()
+      setYtdlpVersion(result.currentVersion)
+      setYtdlpLatest(result.latestVersion)
+      setYtdlpUpdateAvailable(result.updateAvailable)
+      if (result.error) {
+        toast.error(`Failed to check: ${result.error}`)
+      } else if (result.updateAvailable) {
+        toast.info(`Update available: ${result.latestVersion}`)
+      } else {
+        toast.success('yt-dlp is up to date')
+      }
+    } catch (e: any) {
+      toast.error(`Check failed: ${e.message}`)
+    } finally {
+      setYtdlpChecking(false)
+    }
+  }
+
+  const handleUpdateYtDlp = async () => {
+    setYtdlpUpdating(true)
+    try {
+      const result = await window.electron.ytdlp.update()
+      if (result.success) {
+        setYtdlpVersion(result.version || '')
+        setYtdlpUpdateAvailable(false)
+        toast.success(`yt-dlp updated to ${result.version}`)
+      } else {
+        toast.error(`Update failed: ${result.error}`)
+      }
+    } catch (e: any) {
+      toast.error(`Update failed: ${e.message}`)
+    } finally {
+      setYtdlpUpdating(false)
+    }
+  }
+
+  const loadCookieStatus = async () => {
+    try {
+      const status = await window.electron.ytdlp.cookieStatus()
+      setCookieMode(status.mode)
+    } catch {
+      setCookieMode('none')
+    }
+  }
+
+  const handleImportCookies = async () => {
+    setCookieImporting(true)
+    try {
+      const result = await window.electron.ytdlp.importCookies()
+      if (result.success) {
+        setCookieMode('file')
+        toast.success('YouTube cookies imported successfully! Restart playback to apply.')
+      } else if (result.error !== 'Cancelled') {
+        toast.error(result.error || 'Import failed')
+      }
+    } catch (e: any) {
+      toast.error(`Import failed: ${e.message}`)
+    } finally {
+      setCookieImporting(false)
+    }
+  }
+
+  const handleClearCookies = async () => {
+    try {
+      await window.electron.ytdlp.clearCookies()
+      setCookieMode('none')
+      toast.success('YouTube cookies cleared')
+    } catch (e: any) {
+      toast.error(`Failed to clear cookies: ${e.message}`)
     }
   }
 
@@ -520,6 +627,88 @@ const Settings = () => {
                 </AlertDialogContent>
               </AlertDialog>
             </div>
+          </div>
+        </section>
+
+        {/* Advanced Section */}
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-1">
+            <Wrench className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Advanced</h2>
+          </div>
+          
+          <div className="bg-card/30 backdrop-blur-sm rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
+            <SettingRow icon={Download} label="yt-dlp" description={ytdlpVersion ? `Current: ${ytdlpVersion}` : 'YouTube audio engine'}>
+              {ytdlpUpdateAvailable ? (
+                <Button 
+                  size="sm" 
+                  onClick={handleUpdateYtDlp} 
+                  disabled={ytdlpUpdating}
+                  className="bg-primary hover:bg-primary/90"
+                >
+                  {ytdlpUpdating ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Updating...</>
+                  ) : (
+                    <><Download className="h-4 w-4 mr-2" />Update to {ytdlpLatest}</>
+                  )}
+                </Button>
+              ) : (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={handleCheckYtDlpUpdate} 
+                  disabled={ytdlpChecking}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  {ytdlpChecking ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Checking...</>
+                  ) : (
+                    <><RefreshCw className="h-4 w-4 mr-2" />Check for Update</>
+                  )}
+                </Button>
+              )}
+            </SettingRow>
+
+            <SettingRow 
+              icon={Cookie} 
+              label="YouTube Cookies" 
+              description={
+                cookieMode === 'file' ? 'Using imported cookies.txt' :
+                cookieMode === 'browser' ? 'Using browser cookies' :
+                'No cookies — YouTube may block playback'
+              }
+            >
+              <div className="flex items-center gap-2">
+                {cookieMode !== 'none' ? (
+                  <ShieldCheck className="h-4 w-4 text-green-400" />
+                ) : (
+                  <ShieldAlert className="h-4 w-4 text-amber-400" />
+                )}
+                {cookieMode === 'file' ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearCookies}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4 mr-1" />Clear
+                  </Button>
+                ) : null}
+                <Button
+                  variant={cookieMode === 'none' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={handleImportCookies}
+                  disabled={cookieImporting}
+                  className={cookieMode === 'none' ? 'bg-primary hover:bg-primary/90' : 'text-muted-foreground hover:text-foreground'}
+                >
+                  {cookieImporting ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Importing...</>
+                  ) : (
+                    <><FileText className="h-4 w-4 mr-2" />{cookieMode === 'file' ? 'Replace' : 'Import cookies.txt'}</>
+                  )}
+                </Button>
+              </div>
+            </SettingRow>
           </div>
         </section>
 

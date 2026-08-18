@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, session, dialog, Tray, Menu, nativeImage, 
 import path from 'node:path'
 import fs from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
 import { execFile, spawn } from 'child_process'
 import { initSpotifyHandlers } from './spotifyHandler'
 import { spotifyAuth } from './spotifyAuth'
@@ -11,6 +12,16 @@ import { registerThumbProtocol } from './thumbnailCache'
 
 // 1. STANDARD CONFIGURATION
 app.commandLine.appendSwitch('ignore-certificate-errors')
+
+app.on('select-client-certificate', (event, webContents, url, list, callback) => {
+  event.preventDefault()
+  callback() // Continue without providing a certificate
+})
+
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  event.preventDefault()
+  callback(true) // Ignore certificate errors
+})
 
 // Register custom protocol scheme BEFORE app.ready (Electron requirement)
 protocol.registerSchemesAsPrivileged([
@@ -83,6 +94,8 @@ const startProxyServer = () => {
         const formatSelector = `bv*[height<=${quality}]+ba/b[height<=${quality}]/b`
 
         const args = [
+          ...YTDLP_COOKIE_ARGS,
+          '--js-runtimes', 'node',
           `https://www.youtube.com/watch?v=${videoId}`,
           '-o', '-', // Output to stdout
           '--format', formatSelector,
@@ -110,8 +123,11 @@ const startProxyServer = () => {
 
         // Error handling
         ytProcess.stderr.on('data', (data: Buffer) => {
-          // Log only critical errors or first few lines to avoid spam
           const msg = data.toString()
+          if (isCookieError(msg)) {
+            console.warn('[Proxy] Cookie error in video stream — disabling cookies for future calls')
+            YTDLP_COOKIE_ARGS = []
+          }
           if (msg.includes('Error') || msg.includes('headers')) {
             console.error(`[Proxy] yt-dlp stderr: ${msg}`)
           }
@@ -156,7 +172,9 @@ const startProxyServer = () => {
           formatSelector = 'worstaudio[ext=m4a]/worstaudio'
         }
 
-        const args = [
+        const ytDlpArgs = [
+          ...YTDLP_COOKIE_ARGS,
+          '--js-runtimes', 'node',
           `https://www.youtube.com/watch?v=${videoId}`,
           '-o', '-', // Output to stdout
           '--format', formatSelector,
@@ -166,7 +184,7 @@ const startProxyServer = () => {
           '--no-playlist'
         ]
 
-        const ytProcess = spawn(ytDlpPath, args)
+        const ytProcess = spawn(ytDlpPath, ytDlpArgs)
 
         // Set headers for audio stream
         res.writeHead(200, {
@@ -182,6 +200,10 @@ const startProxyServer = () => {
         // Error handling
         ytProcess.stderr.on('data', (data: Buffer) => {
           const msg = data.toString()
+          if (isCookieError(msg)) {
+            console.warn('[Proxy] Cookie error in audio stream — disabling cookies for future calls')
+            YTDLP_COOKIE_ARGS = []
+          }
           // Only log actual errors, not progress
           if (msg.includes('ERROR') || msg.includes('error')) {
             console.error(`[Proxy] yt-dlp audio error: ${msg}`)
@@ -227,6 +249,8 @@ const startProxyServer = () => {
         try {
           // Get all available formats
           const args = [
+            ...YTDLP_COOKIE_ARGS,
+            '--js-runtimes', 'node',
             `https://www.youtube.com/watch?v=${videoId}`,
             '--dump-single-json',
             '--no-warnings',
@@ -314,6 +338,7 @@ const startProxyServer = () => {
 
       // --- EXISTING HLS PROXY LOGIC ---
       const targetUrl = reqUrl.searchParams.get('url')
+      const targetUa = reqUrl.searchParams.get('ua') || ELECTRON_USER_AGENT
       
       if (!targetUrl) {
         res.writeHead(400, { 'Content-Type': 'text/plain' })
@@ -321,13 +346,20 @@ const startProxyServer = () => {
         return
       }
       
+      // Forward the Range header if it exists
+      const fetchHeaders: Record<string, string> = {
+        'User-Agent': targetUa,
+        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://www.youtube.com'
+      }
+      
+      if (req.headers.range) {
+        fetchHeaders['Range'] = req.headers.range
+      }
+      
       // Fetch from YouTube with proper headers
       const response = await fetch(targetUrl, {
-        headers: {
-          'User-Agent': ELECTRON_USER_AGENT,
-          'Referer': 'https://www.youtube.com/',
-          'Origin': 'https://www.youtube.com'
-        }
+        headers: fetchHeaders
       })
       
       if (!response.ok) {
@@ -338,13 +370,22 @@ const startProxyServer = () => {
       
       const contentType = response.headers.get('content-type') || 'application/octet-stream'
       
-      // Set CORS headers
+      // Set CORS and other necessary headers
       const headers: Record<string, string> = {
         'Content-Type': contentType,
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': '*'
+        'Access-Control-Allow-Headers': 'Range, Content-Type, Accept-Ranges'
       }
+      
+      const contentRange = response.headers.get('content-range')
+      if (contentRange) headers['Content-Range'] = contentRange
+      
+      const acceptRanges = response.headers.get('accept-ranges')
+      if (acceptRanges) headers['Accept-Ranges'] = acceptRanges
+      
+      const contentLength = response.headers.get('content-length')
+      if (contentLength) headers['Content-Length'] = contentLength
       
       // Handle OPTIONS preflight
       if (req.method === 'OPTIONS') {
@@ -354,18 +395,35 @@ const startProxyServer = () => {
       }
       
       // For m3u8 manifests, rewrite URLs to go through proxy
-      if (targetUrl.includes('.m3u8') || contentType.includes('mpegurl')) {
+      if (targetUrl.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/vnd.apple.mpegurl')) {
         let content = await response.text()
-        // Rewrite absolute URLs
-        content = content.replace(/^(https?:\/\/[^\s]+)/gm, (match) => {
-          return `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(match)}`
-        })
-        res.writeHead(200, headers)
+        
+        // Rewrite ALL segment/playlist URLs (both absolute and relative)
+        const lines = content.split('\n')
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim()
+          // Any non-empty line that doesn't start with '#' is a URL in m3u8
+          if (line && !line.startsWith('#')) {
+             try {
+               const absoluteUrl = new URL(line, targetUrl).href
+               lines[i] = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(absoluteUrl)}`
+             } catch (e) {
+               // ignore invalid URLs
+             }
+          }
+        }
+        content = lines.join('\n')
+        
+        // Ensure content length is correct for rewritten payload
+        headers['Content-Length'] = Buffer.byteLength(content, 'utf8').toString()
+        res.writeHead(response.status, headers)
         res.end(content)
       } else {
         // Stream binary content (video segments)
+        const status = response.status
         const buffer = Buffer.from(await response.arrayBuffer())
-        res.writeHead(200, { ...headers, 'Content-Length': buffer.length.toString() })
+        headers['Content-Length'] = buffer.length.toString()
+        res.writeHead(status, headers)
         res.end(buffer)
       }
     } catch (error: any) {
@@ -1016,7 +1074,7 @@ interface SpotifySession {
 
 const saveSpotifySession = (session: SpotifySession) => {
   try {
-    fs.writeFileSync(SPOTIFY_STORAGE_FILE, JSON.stringify(session, null, 2));
+    fs.writeFileSync(getSpotifyStorageFile(), JSON.stringify(session, null, 2));
     console.log('[Spotify] Session saved');
   } catch (e) {
     console.error('Error saving Spotify session:', e);
@@ -1061,27 +1119,125 @@ if (!isDev && !fs.existsSync(ytDlpPath)) {
 // YouTube URLs are signed with the User-Agent that requested them
 const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+// --- COOKIE MANAGEMENT ---
+// YouTube requires authentication cookies to avoid "Sign in to confirm you're
+// not a bot" blocks. On Windows, --cookies-from-browser chrome fails because:
+//   1. DPAPI decryption errors (yt-dlp #10927)
+//   2. Chrome locks its cookie DB while open (yt-dlp #7271)
+//
+// Strategy (ordered by preference):
+//   A. --cookies-from-browser chrome  (best UX, but fragile on Windows)
+//   B. --cookies <userData>/yt-cookies.txt  (user imports once, always works)
+//   C. No cookies (many videos will trigger bot detection)
+
+let YTDLP_COOKIE_ARGS: string[] = []
+let cookieArgsProbed = false
+
+/** Path to the user-managed cookies.txt file */
+const getCookieFilePath = (): string =>
+  path.join(app.getPath('userData'), 'yt-cookies.txt')
+
+/** Check if an error string indicates a cookie extraction failure */
+const isCookieError = (s: string): boolean =>
+  s.includes('DPAPI') ||
+  s.includes('Permission denied') ||
+  s.includes('#7271') ||
+  s.includes('Could not copy Chrome cookie database')
+
+/** Check if an error indicates YouTube bot detection (needs cookies) */
+const isBotDetection = (s: string): boolean =>
+  s.includes('Sign in to confirm') ||
+  s.includes('not a bot') ||
+  s.includes('cookies-from-browser or --cookies')
+
 /**
- * Custom wrapper to run yt-dlp binary directly
- * Bypasses the library to ensure we use the correct .exe path
+ * Determine the best cookie strategy at startup.
+ *
+ * 1. If a cookies.txt file exists in userData, use it (most reliable).
+ * 2. Otherwise try --cookies-from-browser chrome.
+ * 3. If that also fails, run without cookies.
+ */
+const probeCookieSupport = async (): Promise<void> => {
+  if (cookieArgsProbed) return
+  cookieArgsProbed = true
+
+  // --- Strategy B: static cookies.txt (preferred — never locks) ---
+  const cookieFile = getCookieFilePath()
+  if (fs.existsSync(cookieFile)) {
+    YTDLP_COOKIE_ARGS = ['--cookies', cookieFile]
+    console.log(`[yt-dlp] Cookie support: ENABLED (using cookies.txt at ${cookieFile})`)
+    return
+  }
+
+  // --- Strategy A: browser cookies ---
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        ytDlpPath,
+        ['--cookies-from-browser', 'chrome', '--version'],
+        { timeout: 10000 },
+        (error, _stdout, stderr) => {
+          const combined = String(stderr || '') + String(error?.message || '')
+          if (error || isCookieError(combined)) {
+            reject(new Error(combined || 'Cookie probe failed'))
+          } else {
+            resolve()
+          }
+        }
+      )
+    })
+    YTDLP_COOKIE_ARGS = ['--cookies-from-browser', 'chrome']
+    console.log('[yt-dlp] Cookie support: ENABLED (--cookies-from-browser chrome)')
+  } catch {
+    console.warn('[yt-dlp] Cookie support: DISABLED (browser extraction failed, no cookies.txt found)')
+    console.warn('[yt-dlp] → Tip: Import a cookies.txt in Settings → Advanced to fix YouTube bot detection')
+    YTDLP_COOKIE_ARGS = []
+  }
+}
+
+/**
+ * Custom wrapper to run yt-dlp binary directly.
+ * Retries without cookie args if a cookie extraction error is encountered.
  */
 const runYtDlp = (args: string[]): Promise<any> => {
-  return new Promise((resolve, reject) => {
-    execFile(ytDlpPath, args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('yt-dlp error:', stderr)
-        reject(error)
-        return
-      }
-      try {
-        const json = JSON.parse(stdout)
-        resolve(json)
-      } catch (parseError) {
-        console.error('JSON Parse Error:', parseError)
-        reject(parseError)
-      }
+  const attempt = (useCookies: boolean): Promise<any> => {
+    const cookieArgs = useCookies ? YTDLP_COOKIE_ARGS : []
+    return new Promise((resolve, reject) => {
+      execFile(ytDlpPath, [...cookieArgs, '--js-runtimes', 'node', ...args], { maxBuffer: 1024 * 1024 * 10, encoding: 'utf8' }, (error, stdout, stderr) => {
+        if (error) {
+          const errStr = String(stderr || '') + String(error?.message || '') + String(stdout || '')
+
+          // Cookie extraction itself failed → retry without cookies
+          if (useCookies && isCookieError(errStr)) {
+            console.warn('[yt-dlp] Cookie error detected, retrying without browser cookies...')
+            // Only disable browser-based cookies; keep cookies.txt if that's what we're using
+            if (YTDLP_COOKIE_ARGS.includes('--cookies-from-browser')) {
+              YTDLP_COOKIE_ARGS = []
+            }
+            attempt(false).then(resolve, reject)
+            return
+          }
+
+          // Log bot detection as a clear actionable message
+          if (isBotDetection(errStr)) {
+            console.error('[yt-dlp] YouTube bot detection triggered! Import a cookies.txt in Settings → Advanced.')
+          }
+
+          console.error('yt-dlp error:', stderr || error.message)
+          reject(error)
+          return
+        }
+        try {
+          const json = JSON.parse(stdout)
+          resolve(json)
+        } catch (parseError) {
+          console.error('JSON Parse Error:', parseError)
+          reject(parseError)
+        }
+      })
     })
-  })
+  }
+  return attempt(YTDLP_COOKIE_ARGS.length > 0)
 }
 
 // --- DOWNLOAD MANAGER VARIABLES ---
@@ -1090,6 +1246,9 @@ const pendingDownloads = new Map<string, { filename: string; saveAs: boolean }>(
 function createWindow() {
   // Start HLS Proxy Server
   startProxyServer()
+  
+  // Probe whether --cookies-from-browser chrome works (DPAPI check)
+  probeCookieSupport()
   
   win = new BrowserWindow({
     width: 1200,
@@ -1422,18 +1581,20 @@ ipcMain.handle('youtube-stream', async (_, videoId, quality = 'high') => {
       '--dump-single-json',
       '--no-warnings',
       '--no-check-certificate',
-      '--format', formatSelector
+      '--format', formatSelector,
+      '--user-agent', ELECTRON_USER_AGENT
     ]
 
     const output = await runYtDlp(args)
 
     if (!output || !output.url) throw new Error('No stream URL found')
 
-    // Return direct YouTube URL (supports seeking via Range headers)
-    console.log(`[YouTube] Returning direct audio URL for: ${videoId}`)
+    // Use the robust /audio piped stream endpoint to completely bypass YouTube's 403 Forbidden blocks.
+    // yt-dlp will handle downloading and fallback to format 18 if audio-only formats are blocked by SABR.
+    console.log(`[YouTube] Returning local /audio piped proxy for: ${videoId}`)
 
     return {
-      url: output.url,  // Direct YouTube URL for seeking support
+      url: `http://localhost:${currentProxyPort}/audio?id=${videoId}&quality=${quality}`,
       duration: output.duration,
       title: output.title
     }
@@ -1449,7 +1610,7 @@ ipcMain.handle('youtube-video-url', async (_, videoId) => {
     console.log(`[YouTube] Fetching HLS Stream for: ${videoId}`)
     const url = `https://www.youtube.com/watch?v=${videoId}`
 
-    const args = [url, '--dump-single-json', '--no-warnings', '--no-check-certificate']
+    const args = [url, '--dump-single-json', '--no-warnings', '--no-check-certificate', '--user-agent', ELECTRON_USER_AGENT]
 
     const output = await runYtDlp(args)
 
@@ -1486,7 +1647,8 @@ ipcMain.handle('youtube-video-url', async (_, videoId) => {
 })
 
 // --- HANDLER: GET VIDEO STREAM WITH QUALITY SELECTION ---
-// Prioritizes HLS for adaptive quality, falls back to muxed MP4
+// Uses yt-dlp piped streaming for reliable playback at all qualities
+// YouTube's HLS manifests are broken with hls.js (fragParsingError), so we skip them
 ipcMain.handle('youtube-video-stream', async (_, videoId, maxHeight = 1080) => {
   try {
     console.log(`[YouTube] Fetching Video Stream for: ${videoId} (Max Height: ${maxHeight}p)`)
@@ -1504,37 +1666,10 @@ ipcMain.handle('youtube-video-stream', async (_, videoId, maxHeight = 1080) => {
     const output = await runYtDlp(args)
     if (!output) throw new Error('No data returned from yt-dlp')
 
-    // Strategy 1: Try to get HLS manifest (best for adaptive quality)
-    let hlsUrl = output.manifest_url
-    
-    if (!hlsUrl && output.formats) {
-      // Look for HLS format in formats list
-      const hlsFormat = output.formats.find(
-        (f: any) => f.protocol === 'm3u8' || f.protocol === 'm3u8_native' || 
-                    (f.url && f.url.includes('.m3u8'))
-      )
-      if (hlsFormat) {
-        hlsUrl = hlsFormat.url
-      }
-    }
-
-    if (hlsUrl) {
-      console.log(`[YouTube] Found HLS manifest for adaptive quality`)
-      const proxyUrl = `http://localhost:${currentProxyPort}/proxy?url=${encodeURIComponent(hlsUrl)}`
-      
-      return {
-        type: 'hls',
-        url: proxyUrl,
-        isHls: true,
-        title: output.title,
-        duration: output.duration,
-        thumbnail: output.thumbnail,
-        qualities: ['auto', '1080p', '720p', '480p', '360p', '240p'] // HLS has all
-      }
-    }
-
-    // Strategy 2: Use yt-dlp piped streaming (merges video+audio on-the-fly for higher qualities)
-    console.log(`[YouTube] No native HLS, using yt-dlp piped streaming`)
+    // Strategy 1: Use yt-dlp piped streaming (most reliable, supports all qualities)
+    // YouTube's HLS manifests use non-standard TS segments that break hls.js,
+    // so we prioritize the piped streaming approach which handles everything internally.
+    console.log(`[YouTube] Using yt-dlp piped streaming`)
     
     // Get ALL video formats (including video-only which yt-dlp will merge with audio)
     // This enables 1080p, 1440p, 4K quality options
@@ -1783,8 +1918,8 @@ ipcMain.handle('spotify-check-session', async () => {
 
 // Optional: Clear session
 ipcMain.handle('spotify-logout', async () => {
-  if (fs.existsSync(SPOTIFY_STORAGE_FILE)) {
-    fs.unlinkSync(SPOTIFY_STORAGE_FILE);
+  if (fs.existsSync(getSpotifyStorageFile())) {
+    fs.unlinkSync(getSpotifyStorageFile());
   }
   return { success: true };
 });
@@ -1853,6 +1988,175 @@ ipcMain.handle('ytmusic-login', async () => {
     });
   });
 });
+
+// --- YT-DLP UPDATE HANDLERS ---
+
+// Helper: fetch JSON from a URL (follows redirects)
+function fetchJson(url: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const get = url.startsWith('https') ? https.get : http.get
+    get(url, { headers: { 'User-Agent': 'my-spotify-electron' } }, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchJson(res.headers.location).then(resolve, reject)
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`))
+      }
+      let data = ''
+      res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)) } catch (e) { reject(e) }
+      })
+      res.on('error', reject)
+    }).on('error', reject)
+  })
+}
+
+// Helper: download a file from URL (follows redirects) to disk
+function downloadFile(url: string, destPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const get = url.startsWith('https') ? https.get : http.get
+    get(url, { headers: { 'User-Agent': 'my-spotify-electron' } }, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return downloadFile(res.headers.location, destPath).then(resolve, reject)
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`))
+      }
+      const file = fs.createWriteStream(destPath)
+      res.pipe(file)
+      file.on('finish', () => { file.close(() => resolve()) })
+      file.on('error', (err) => {
+        fs.unlink(destPath, () => {}) // cleanup on error
+        reject(err)
+      })
+    }).on('error', (err) => {
+      fs.unlink(destPath, () => {})
+      reject(err)
+    })
+  })
+}
+
+// Get local yt-dlp version
+function getLocalYtDlpVersion(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(ytDlpPath, ['--version'], { timeout: 10000 }, (error, stdout) => {
+      if (error) return reject(error)
+      resolve(stdout.trim())
+    })
+  })
+}
+
+ipcMain.handle('ytdlp:check-update', async () => {
+  try {
+    const [currentVersion, releaseData] = await Promise.all([
+      getLocalYtDlpVersion(),
+      fetchJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest')
+    ])
+    const latestVersion = (releaseData.tag_name || '').replace(/^v/, '')
+    const updateAvailable = currentVersion !== latestVersion
+    return { currentVersion, latestVersion, updateAvailable }
+  } catch (error: any) {
+    console.error('[yt-dlp] Check update error:', error)
+    return { currentVersion: 'unknown', latestVersion: 'unknown', updateAvailable: false, error: error.message }
+  }
+})
+
+ipcMain.handle('ytdlp:update', async () => {
+  try {
+    // 1. Fetch latest release info
+    const releaseData = await fetchJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest')
+    const version = (releaseData.tag_name || '').replace(/^v/, '')
+
+    // 2. Find the yt-dlp.exe asset
+    const asset = releaseData.assets?.find((a: any) => a.name === 'yt-dlp.exe')
+    if (!asset) {
+      return { success: false, error: 'Could not find yt-dlp.exe in release assets' }
+    }
+
+    // 3. Download to temp file next to the existing binary
+    const tmpPath = ytDlpPath + '.tmp'
+    console.log(`[yt-dlp] Downloading ${asset.browser_download_url} to ${tmpPath}`)
+    await downloadFile(asset.browser_download_url, tmpPath)
+
+    // 4. Replace old binary with new one
+    const backupPath = ytDlpPath + '.bak'
+    if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath)
+    fs.renameSync(ytDlpPath, backupPath)  // backup old
+    fs.renameSync(tmpPath, ytDlpPath)      // promote new
+    // Clean up backup (optional — keep it for safety)
+    try { fs.unlinkSync(backupPath) } catch { /* ignore */ }
+
+    console.log(`[yt-dlp] Updated to ${version}`)
+    return { success: true, version }
+  } catch (error: any) {
+    console.error('[yt-dlp] Update error:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+// --- Cookie file management IPC handlers ---
+
+ipcMain.handle('ytdlp:import-cookies', async () => {
+  try {
+    const result = await dialog.showOpenDialog({
+      title: 'Select cookies.txt file',
+      filters: [
+        { name: 'Cookies', extensions: ['txt'] },
+        { name: 'All Files', extensions: ['*'] }
+      ],
+      properties: ['openFile']
+    })
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, error: 'Cancelled' }
+    }
+
+    const srcPath = result.filePaths[0]
+    const content = fs.readFileSync(srcPath, 'utf8')
+
+    // Basic sanity check — Netscape cookies.txt starts with a comment or domain lines
+    if (!content.includes('.youtube.com') && !content.includes('youtube.com')) {
+      return { success: false, error: 'This file does not appear to contain YouTube cookies. Make sure you export cookies from a page on youtube.com.' }
+    }
+
+    const destPath = getCookieFilePath()
+    fs.copyFileSync(srcPath, destPath)
+
+    // Activate the cookie file immediately
+    YTDLP_COOKIE_ARGS = ['--cookies', destPath]
+    console.log(`[yt-dlp] Cookies imported from ${srcPath} → ${destPath}`)
+
+    return { success: true, path: destPath }
+  } catch (error: any) {
+    console.error('[yt-dlp] Import cookies error:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('ytdlp:cookie-status', () => {
+  const cookieFile = getCookieFilePath()
+  const fileExists = fs.existsSync(cookieFile)
+
+  if (YTDLP_COOKIE_ARGS.includes('--cookies') && fileExists) {
+    return { mode: 'file' as const, path: cookieFile }
+  } else if (YTDLP_COOKIE_ARGS.includes('--cookies-from-browser')) {
+    return { mode: 'browser' as const }
+  } else {
+    return { mode: 'none' as const }
+  }
+})
+
+ipcMain.handle('ytdlp:clear-cookies', () => {
+  const cookieFile = getCookieFilePath()
+  if (fs.existsSync(cookieFile)) {
+    fs.unlinkSync(cookieFile)
+    console.log('[yt-dlp] Cookie file deleted')
+  }
+  YTDLP_COOKIE_ARGS = []
+  cookieArgsProbed = false  // Allow re-probing on next use
+  return { success: true }
+})
 
 initYTMusicHandlers();
 

@@ -2,7 +2,7 @@
 // TOTP-based Spotify Authentication - Follows sonic-liberation approach
 
 import { EventEmitter } from 'events';
-import { app, net } from 'electron';
+import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -249,58 +249,29 @@ export class SpotifyAuthEndpoint extends EventEmitter {
     
     console.log(`[SpotifyAuth] Fetching token from: /api/token?...totpVer=${totpVer}`);
     
-    return new Promise((resolve, reject) => {
-      const request = net.request({
-        method: 'GET',
-        url,
-        useSessionCookies: false
-      });
-      
-      request.setHeader('Cookie', `sp_dc=${this._spDc}`);
-      request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      request.setHeader('Accept', 'application/json');
-      request.setHeader('Accept-Language', 'en-US,en;q=0.9');
-      request.setHeader('Referer', 'https://open.spotify.com/');
-      request.setHeader('Origin', 'https://open.spotify.com');
-      
-      let responseData = '';
-      
-      request.on('response', (response) => {
-        if (response.statusCode !== 200) {
-          let errorText = '';
-          response.on('data', (chunk) => {
-            errorText += chunk.toString();
-          });
-          response.on('end', () => {
-            console.error('[SpotifyAuth] Token error:', response.statusCode, errorText.substring(0, 200));
-            reject(new Error(`Token fetch failed: HTTP ${response.statusCode}`));
-          });
-          return;
-        }
-        
-        response.on('data', (chunk) => {
-          responseData += chunk.toString();
-        });
-        
-        response.on('end', () => {
-          try {
-            const data = JSON.parse(responseData);
-            if (data.accessToken) {
-              console.log('[SpotifyAuth] Got access token, length:', data.accessToken.length);
-            }
-            resolve(data);
-          } catch (e) {
-            reject(new Error('Failed to parse token response'));
-          }
-        });
-      });
-      
-      request.on('error', (error) => {
-        reject(error);
-      });
-      
-      request.end();
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Cookie': `sp_dc=${this._spDc}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://open.spotify.com/',
+        'Origin': 'https://open.spotify.com',
+      },
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[SpotifyAuth] Token error:', response.status, errorText.substring(0, 200));
+      throw new Error(`Token fetch failed: HTTP ${response.status}`);
+    }
+
+    const data: any = await response.json();
+    if (data.accessToken) {
+      console.log('[SpotifyAuth] Got access token, length:', data.accessToken.length);
+    }
+    return data;
   }
 }
 

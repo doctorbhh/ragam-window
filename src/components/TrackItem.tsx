@@ -100,10 +100,20 @@ export default function TrackItem({
 
   return (
     <div
-      className={`group flex items-center gap-4 px-4 py-2 hover:bg-accent/50 rounded-md transition-colors ${isCurrentTrack ? 'bg-accent/50' : ''}`}
+      className={`group flex items-center gap-4 px-4 py-2 hover:bg-accent/50 rounded-md transition-colors ${isCurrentTrack ? 'bg-accent/50 is-active-track' : ''}`}
     >
       {showIndex && (
-        <div className="w-4 text-center text-sm text-muted-foreground font-medium">{index + 1}</div>
+        <div className={`w-4 text-center text-sm font-medium ${isCurrentTrack ? 'text-primary' : 'text-muted-foreground'}`}>
+          {isCurrentTrack ? (
+            <div className="flex items-end justify-center gap-[2px] h-3 w-4 pb-[2px]">
+              <div className="w-[3px] bg-primary animate-pulse h-2" style={{ animationDelay: '0ms' }} />
+              <div className="w-[3px] bg-primary animate-pulse h-3" style={{ animationDelay: '150ms' }} />
+              <div className="w-[3px] bg-primary animate-pulse h-[6px]" style={{ animationDelay: '300ms' }} />
+            </div>
+          ) : (
+            index + 1
+          )}
+        </div>
       )}
 
       {showCover && (

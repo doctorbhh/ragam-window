@@ -179,6 +179,32 @@ declare global {
         getWatchPlaylist: (videoId: string, playlistId?: string, radio?: boolean) => Promise<any>
         getSongRelated: (browseId: string) => Promise<any[]>
       }
+
+      ytdlp: {
+        checkUpdate: () => Promise<{
+          currentVersion: string
+          latestVersion: string
+          updateAvailable: boolean
+          error?: string
+        }>
+        update: () => Promise<{
+          success: boolean
+          version?: string
+          error?: string
+        }>
+        importCookies: () => Promise<{
+          success: boolean
+          path?: string
+          error?: string
+        }>
+        cookieStatus: () => Promise<{
+          mode: 'file' | 'browser' | 'none'
+          path?: string
+        }>
+        clearCookies: () => Promise<{
+          success: boolean
+        }>
+      }
     }
   }
 }

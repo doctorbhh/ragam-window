@@ -7,3 +7,8 @@ out
 bin
 .env
 .kombai
+
+*.mp4
+*.webm
+*.part
+*.mkv

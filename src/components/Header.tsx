@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Settings, LogOut, User as UserIcon } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Settings, LogOut, User as UserIcon, Sun, Moon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -13,11 +13,43 @@ import { useState } from 'react'
 import { SearchDialog } from './SearchDialog.tsx'
 import { useSpotifyAuth } from '@/context/SpotifyAuthContext'
 import { useNavigate } from 'react-router-dom'
+import { useEffect } from 'react'
+import { getTheme, getRagamMode, setRagamMode } from '@/services/instanceService'
 
 export function Header() {
   const [searchOpen, setSearchOpen] = useState(false)
+  const [isRagam, setIsRagam] = useState(false)
+  const [isLightMode, setIsLightMode] = useState(false)
   const { user, login, logout } = useSpotifyAuth()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    // Determine if Ragam theme is active
+    const theme = getTheme()
+    setIsRagam(theme === 'ragam')
+    
+    // Load initial mode
+    setIsLightMode(getRagamMode() === 'light')
+
+    // Listen for theme changes from Settings.tsx
+    const handleStorageChange = () => {
+      setIsRagam(getTheme() === 'ragam')
+      setIsLightMode(getRagamMode() === 'light')
+    }
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
+  }, [])
+
+  const toggleRagamMode = () => {
+    const newMode = isLightMode ? 'dark' : 'light'
+    setIsLightMode(!isLightMode)
+    setRagamMode(newMode)
+    if (newMode === 'light') {
+      document.documentElement.classList.add('ragam-light')
+    } else {
+      document.documentElement.classList.remove('ragam-light')
+    }
+  }
 
   return (
     <>
@@ -56,6 +88,19 @@ export function Header() {
           >
             <Settings className="h-5 w-5" />
           </Button>
+
+          {/* Ragam Light/Dark Mode Toggle */}
+          {isRagam && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={toggleRagamMode}
+              aria-label="Toggle light mode"
+            >
+              {isLightMode ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
+            </Button>
+          )}
 
           {/* User Profile / Login */}
           {user ? (

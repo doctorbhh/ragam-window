@@ -1,11 +1,25 @@
 // electron/spotify/gqlClient.ts
 // GraphQL client using persisted queries from sonic-liberation
+// Uses Node's native fetch() instead of Electron's net module to avoid
+// ERR_SSL_CLIENT_AUTH_CERT_NEEDED on networks with SSL inspection/VPNs.
 
-import { net } from 'electron';
 import { spotifyAuth } from '../spotifyAuth';
 
 const GQL_ENDPOINT = 'https://api-partner.spotify.com/pathfinder/v1/query';
 const API_ENDPOINT = 'https://api.spotify.com/v1';
+
+// Common browser-spoofing headers shared by both request helpers
+const SPOOF_HEADERS: Record<string, string> = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Origin': 'https://open.spotify.com',
+  'Referer': 'https://open.spotify.com/',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-site',
+  'app-platform': 'WebPlayer',
+  'spotify-app-version': '1.2.30.290.g183057e9',
+};
 
 // Persisted Query Hashes from sonic-liberation
 const HASHES = {
@@ -25,7 +39,7 @@ const HASHES = {
   home: 'd62af2714f2623c923cc9eeca4b9545b4363abaa9188a9e94e2b63b823419a2c',
 };
 
-// Helper to make GraphQL requests using Electron's net module
+// Helper to make GraphQL requests using Node's native fetch
 async function gqlRequest(operationName: string, hash: string, variables: any = {}): Promise<any> {
   const accessToken = spotifyAuth.accessToken;
   if (!accessToken) {
@@ -43,51 +57,24 @@ async function gqlRequest(operationName: string, hash: string, variables: any = 
     }
   });
 
-  return new Promise((resolve, reject) => {
-    const request = net.request({
-      method: 'POST',
-      url: GQL_ENDPOINT,
-    });
-
-    // Browser spoofing headers - Critical for avoiding 429s
-    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    request.setHeader('Authorization', `Bearer ${accessToken}`);
-    request.setHeader('Content-Type', 'application/json');
-    request.setHeader('Accept', 'application/json');
-    request.setHeader('Origin', 'https://open.spotify.com');
-    request.setHeader('Referer', 'https://open.spotify.com/');
-    request.setHeader('Sec-Fetch-Dest', 'empty');
-    request.setHeader('Sec-Fetch-Mode', 'cors');
-    request.setHeader('Sec-Fetch-Site', 'same-site');
-    request.setHeader('app-platform', 'WebPlayer');
-    request.setHeader('spotify-app-version', '1.2.30.290.g183057e9');
-
-    let responseData = '';
-
-    request.on('response', (response) => {
-      response.on('data', (chunk) => {
-        responseData += chunk.toString();
-      });
-
-      response.on('end', () => {
-        try {
-          const data = JSON.parse(responseData);
-          if (data.errors) {
-            console.error('[GQL] Error:', data.errors[0]?.message);
-            reject(new Error(data.errors[0]?.message || 'GraphQL error'));
-          } else {
-            resolve(data);
-          }
-        } catch (e) {
-          reject(new Error('Failed to parse GraphQL response'));
-        }
-      });
-    });
-
-    request.on('error', reject);
-    request.write(body);
-    request.end();
+  const response = await fetch(GQL_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      ...SPOOF_HEADERS,
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body,
   });
+
+  const data: any = await response.json();
+
+  if (data.errors) {
+    console.error('[GQL] Error:', data.errors[0]?.message);
+    throw new Error(data.errors[0]?.message || 'GraphQL error');
+  }
+
+  return data;
 }
 
 // Helper to make REST API requests (fallback for some endpoints)
@@ -97,68 +84,34 @@ async function apiRequest(endpoint: string, retries = 3): Promise<any> {
     throw new Error('Not authenticated');
   }
 
-  return new Promise((resolve, reject) => {
-    const request = net.request({
-      method: 'GET',
-      url: `${API_ENDPOINT}${endpoint}`,
-    });
-
-    // Browser spoofing headers
-    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    request.setHeader('Authorization', `Bearer ${accessToken}`);
-    request.setHeader('Accept', 'application/json');
-    request.setHeader('Origin', 'https://open.spotify.com');
-    request.setHeader('Referer', 'https://open.spotify.com/');
-    request.setHeader('Sec-Fetch-Dest', 'empty');
-    request.setHeader('Sec-Fetch-Mode', 'cors');
-    request.setHeader('Sec-Fetch-Site', 'same-site');
-    request.setHeader('app-platform', 'WebPlayer');
-    request.setHeader('spotify-app-version', '1.2.30.290.g183057e9');
-
-    let responseData = '';
-
-    request.on('response', (response) => {
-      response.on('data', (chunk) => {
-        responseData += chunk.toString();
-      });
-
-      response.on('end', () => {
-        try {
-          if (response.statusCode === 429 && retries > 0) {
-             const retryAfter = parseInt(response.headers['retry-after'] as string || '1', 10);
-             console.warn(`[API] Rate Limited (429). Retrying after ${retryAfter}s...`);
-             setTimeout(() => {
-                 apiRequest(endpoint, retries - 1).then(resolve).catch(reject);
-             }, retryAfter * 1000);
-             return;
-          }
-
-          const data = JSON.parse(responseData);
-          if (data.error) { // Handle { error: { status: 429, ... } }
-             if (data.error.status === 429 && retries > 0) {
-                 console.warn(`[API] Rate Limited (JSON 429). Retrying...`);
-                 setTimeout(() => {
-                     apiRequest(endpoint, retries - 1).then(resolve).catch(reject);
-                 }, 2000);
-                 return;
-             }
-             console.error('[API] Request failed:', data.error);
-             reject(new Error(data.error.message || `API Error ${data.error.status}`));
-             return;
-          }
-          resolve(data);
-        } catch (e) {
-          reject(new Error('Failed to parse API response'));
-        }
-      });
-    });
-
-    request.on('error', (err) => {
-       console.error('[API] Network Error:', err);
-       reject(err);
-    });
-    request.end();
+  const response = await fetch(`${API_ENDPOINT}${endpoint}`, {
+    method: 'GET',
+    headers: {
+      ...SPOOF_HEADERS,
+      'Authorization': `Bearer ${accessToken}`,
+    },
   });
+
+  if (response.status === 429 && retries > 0) {
+    const retryAfter = parseInt(response.headers.get('retry-after') || '1', 10);
+    console.warn(`[API] Rate Limited (429). Retrying after ${retryAfter}s...`);
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
+    return apiRequest(endpoint, retries - 1);
+  }
+
+  const data: any = await response.json();
+
+  if (data.error) {
+    if (data.error.status === 429 && retries > 0) {
+      console.warn(`[API] Rate Limited (JSON 429). Retrying...`);
+      await new Promise(r => setTimeout(r, 2000));
+      return apiRequest(endpoint, retries - 1);
+    }
+    console.error('[API] Request failed:', data.error);
+    throw new Error(data.error.message || `API Error ${data.error.status}`);
+  }
+
+  return data;
 }
 
 // ============ USER ENDPOINTS ============

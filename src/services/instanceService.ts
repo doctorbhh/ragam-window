@@ -39,6 +39,14 @@ export const DEFAULT_THEME = 'default'
 export const getTheme = () => localStorage.getItem(STORAGE_KEY_THEME) || DEFAULT_THEME
 export const setTheme = (theme: string) => localStorage.setItem(STORAGE_KEY_THEME, theme)
 
+// Ragam Theme Mode (Light/Dark)
+const STORAGE_KEY_RAGAM_MODE = 'ragam_theme_mode'
+export const getRagamMode = (): 'dark' | 'light' => {
+  const mode = localStorage.getItem(STORAGE_KEY_RAGAM_MODE)
+  return (mode === 'dark' || mode === 'light') ? mode : 'dark' // Default dark
+}
+export const setRagamMode = (mode: 'dark' | 'light') => localStorage.setItem(STORAGE_KEY_RAGAM_MODE, mode)
+
 // Audio Normalization Getters/Setters
 export const getAudioNormalization = (): boolean => {
   const stored = localStorage.getItem(STORAGE_KEY_NORMALIZATION)
@@ -89,6 +97,28 @@ export const fetchJioSaavnInstance = async (): Promise<string> => {
     return DEFAULT_INSTANCE
   }
 }
+
+// Player Session Persistence
+const STORAGE_KEY_SESSION = 'ragam_player_session'
+
+export const getPlayerSession = (): { currentTrack: any; queue: any[]; progress: number } | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SESSION)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+export const setPlayerSession = (session: {
+  currentTrack: any
+  queue: any[]
+  progress: number
+}) => {
+  try {
+    localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session))
+  } catch { /* quota exceeded — ignore */ }
+}
+
+export const clearPlayerSession = () => localStorage.removeItem(STORAGE_KEY_SESSION)
 
 export const clearAllData = () => {
   localStorage.clear()

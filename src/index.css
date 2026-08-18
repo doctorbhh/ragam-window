@@ -181,6 +181,117 @@ All colors MUST be HSL.
     --shadow-glow: 0 0 40px hsl(340 82% 52% / 0.3);
     --shadow-player: 0 -10px 40px -10px rgba(233, 30, 99, 0.3);
   }
+
+  /* Ragam Theme - Rose Red & Carbon with Waveform Player */
+  .theme-ragam {
+    /* Primary: #E11D48 = hsl(347 77% 50%) */
+    --background: 0 0% 9%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 11%;
+    --popover-foreground: 0 0% 95%;
+
+    /* Rose red primary */
+    --primary: 347 77% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 347 77% 50%;
+
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 0 0% 17%;
+    --muted-foreground: 0 0% 55%;
+
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 95%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 100% / 0.06;
+    --input: 0 0% 17%;
+    --ring: 347 77% 50%;
+
+    /* Sidebar — darker carbon */
+    --sidebar-background: 0 0% 7%;
+    --sidebar-foreground: 0 0% 65%;
+    --sidebar-primary: 347 77% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 100% / 0.08;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 0 0% 100% / 0.05;
+    --sidebar-ring: 347 77% 50%;
+
+    /* Player — glassmorphic dark */
+    --player-background: 0 0% 7%;
+    --player-foreground: 0 0% 95%;
+
+    /* Gradients & Shadows */
+    --gradient-primary: linear-gradient(135deg, hsl(347 77% 50%), hsl(330 75% 48%));
+    --shadow-glow: 0 0 40px hsl(347 77% 50% / 0.25);
+    --shadow-player: 0 -4px 30px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Ragam Light Mode — Colors from mockup */
+  /* main-bg: #FAFAFA, sidebar: #F5F5F5, panel: #FFF, text: #121212/#757575 */
+  .theme-ragam.ragam-light {
+    /* #FAFAFA = hsl(0 0% 98%) */
+    --background: 0 0% 98%;
+    /* #121212 = hsl(0 0% 7%) */
+    --foreground: 0 0% 7%;
+
+    /* #FFFFFF */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 7%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 7%;
+
+    /* Rose red accent stays same */
+    --primary: 347 77% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 347 77% 50%;
+
+    /* #E5E5E5 hover = hsl(0 0% 90%) */
+    --secondary: 0 0% 90%;
+    --secondary-foreground: 0 0% 7%;
+
+    /* #757575 = hsl(0 0% 46%) */
+    --muted: 0 0% 93%;
+    --muted-foreground: 0 0% 46%;
+
+    --accent: 0 0% 93%;
+    --accent-foreground: 0 0% 7%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* rgba(0,0,0,0.05) borders */
+    --border: 0 0% 0% / 0.05;
+    --input: 0 0% 93%;
+    --ring: 347 77% 50%;
+
+    /* Sidebar: #F5F5F5 = hsl(0 0% 96%) */
+    --sidebar-background: 0 0% 96%;
+    --sidebar-foreground: 0 0% 46%;
+    --sidebar-primary: 347 77% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 0% / 0.05;
+    --sidebar-accent-foreground: 0 0% 7%;
+    --sidebar-border: 0 0% 0% / 0.05;
+    --sidebar-ring: 347 77% 50%;
+
+    /* Player: pure white, glassmorphic */
+    --player-background: 0 0% 100%;
+    --player-foreground: 0 0% 7%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(347 77% 50%), hsl(330 75% 48%));
+    --shadow-glow: 0 0 30px hsl(347 77% 50% / 0.15);
+    --shadow-player: 0 -4px 20px rgba(0, 0, 0, 0.05);
+  }
 }
 
 @layer base {
@@ -309,4 +420,163 @@ All colors MUST be HSL.
 
 .theme-mello .bg-gradient-to-b {
   background: #1f1f1f !important;
+}
+
+/* Ragam Theme Utilities */
+.theme-ragam .glass-panel {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Glassmorphic player bar with rose glow */
+.theme-ragam .player-glow {
+  background: rgba(18, 18, 18, 0.85) !important;
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* Active sidebar item left-border indicator & colored icon */
+.theme-ragam .bg-sidebar-accent {
+  position: relative;
+  overflow: hidden;
+}
+.theme-ragam .bg-sidebar-accent::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: hsl(var(--primary));
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+.theme-ragam .bg-sidebar-accent svg {
+  color: hsl(var(--primary));
+}
+
+/* Remove primary gradient tint from main content */
+.theme-ragam .from-primary\/20 {
+  --tw-gradient-from: transparent !important;
+}
+
+.theme-ragam .bg-gradient-to-b {
+  background: hsl(var(--background)) !important;
+}
+
+/* Active track styling */
+.theme-ragam .is-active-track {
+  border-left: 4px solid hsl(var(--primary));
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Waveform Seek Bar — Full Mirrored Design */
+.waveform-bar {
+  border-radius: 9999px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  will-change: transform;
+}
+
+.waveform-played-pink { background-color: #EC4899; }
+.waveform-played-purple { background-color: #A855F7; }
+.waveform-played-blue { background-color: #3B82F6; }
+.waveform-unplayed { background-color: rgba(255, 255, 255, 0.15); }
+
+/* Played bars — gentle wave animation */
+@keyframes waveform-wave {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.18); }
+}
+
+.waveform-bar-played {
+  animation: waveform-wave 1.2s ease-in-out infinite;
+}
+
+/* Playhead bar — stronger pulse */
+@keyframes waveform-pulse {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.4); }
+}
+
+.waveform-bar-playhead {
+  animation: waveform-pulse 0.6s ease-in-out infinite;
+  box-shadow: 0 0 6px 1px rgba(236, 72, 153, 0.45);
+}
+
+/* Album art glow for Ragam theme */
+.theme-ragam .album-glow {
+  box-shadow: 0 0 30px -5px rgba(236, 72, 153, 0.3);
+}
+
+/* ---- Ragam Light Mode Overrides ---- */
+
+/* Waveform: unplayed bars dark on light bg (from mockup: rgba(0,0,0,0.1)) */
+.theme-ragam.ragam-light .waveform-unplayed {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Scrollbar: dark thumb on light bg */
+.theme-ragam.ragam-light ::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Player glass: white glassmorphic (from mockup) */
+.theme-ragam.ragam-light .player-glow {
+  background: rgba(255, 255, 255, 0.85) !important;
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.05);
+}
+
+/* Album glow: softer for light backgrounds */
+.theme-ragam.ragam-light .album-glow {
+  box-shadow: 0 0 30px -5px rgba(225, 29, 72, 0.25);
+}
+
+/* Glass panels: white with subtle border */
+.theme-ragam.ragam-light .ragam-glass-panel {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* Fix text colors inside the player for light mode */
+.theme-ragam.ragam-light .player-glow .text-white,
+.theme-ragam.ragam-light .player-glow .text-white\/90,
+.theme-ragam.ragam-light .player-glow .text-white\/80 {
+  color: hsl(var(--foreground)) !important;
+}
+.theme-ragam.ragam-light .player-glow .text-white\/50 {
+  color: hsl(var(--foreground) / 0.5) !important;
+}
+.theme-ragam.ragam-light .player-glow .text-muted-foreground {
+  color: hsl(var(--foreground) / 0.6) !important; /* Make muted text darker for contrast */
+}
+
+/* Fix button hover states in the player, excluding the primary Play/Pause button */
+.theme-ragam.ragam-light .player-glow button:not(.bg-primary):hover {
+  color: hsl(var(--foreground)) !important;
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Ensure the primary Play/Pause button stays white text on hover */
+.theme-ragam.ragam-light .player-glow button.bg-primary:hover {
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+/* Specifically fix Tailwind text-white hovers in the player */
+.theme-ragam.ragam-light .player-glow .hover\:text-white:hover,
+.theme-ragam.ragam-light .player-glow .group:hover .group-hover\:text-white {
+  color: hsl(var(--foreground)) !important;
+}
+.theme-ragam.ragam-light .player-glow .hover\:text-white\/70:hover {
+  color: hsl(var(--foreground) / 0.8) !important;
+}
+
+/* Fix Tailwind white/10 backgrounds on hover */
+.theme-ragam.ragam-light .player-glow .hover\:bg-white\/10:hover,
+.theme-ragam.ragam-light .player-glow .hover\:bg-white\/5:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
 }
